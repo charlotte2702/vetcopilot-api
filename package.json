@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "sync": "rm -rf public && mkdir -p public && cp -R ../vetcopilot-pwa/. public/",
+    "sync": "test -f public/index.html && echo 'public/index.html OK' || { echo 'ERREUR: public/index.html introuvable'; exit 1; }",
     "build": "npm run sync"
   },
   "dependencies": {
