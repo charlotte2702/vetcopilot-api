@@ -1,0 +1,20 @@
+{
+  "name": "vetcopilot-api",
+  "version": "0.1.0",
+  "description": "Backend API for VetCopilot — serves the static PWA prototype and provides mock endpoints.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "sync": "rm -rf public && mkdir -p public && cp -R ../vetcopilot-pwa/. public/",
+    "build": "npm run sync"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
