@@ -280,6 +280,43 @@ box-shadow:var(--shl);z-index:250;overflow:hidden;transform:translateY(-8px);opa
 .notif-item.unread{background:rgba(43,160,143,.03)}
 .notif-dot-l{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
 
+/* CHAT WIDGET */
+.chat-fab{position:fixed;bottom:24px;right:24px;width:58px;height:58px;border-radius:50%;background:var(--t);color:#fff;border:none;font-size:26px;cursor:pointer;box-shadow:0 8px 24px rgba(11,29,52,.25),0 2px 6px rgba(11,29,52,.15);z-index:380;display:flex;align-items:center;justify-content:center;transition:transform .18s,box-shadow .18s}
+.chat-fab:hover{transform:translateY(-2px) scale(1.04);box-shadow:0 12px 30px rgba(11,29,52,.3)}
+.chat-fab.hidden{display:none}
+.chat-panel{position:fixed;bottom:24px;right:24px;width:380px;max-width:calc(100vw - 32px);height:580px;max-height:calc(100vh - 48px);background:#fff;border-radius:18px;box-shadow:0 16px 48px rgba(11,29,52,.22),0 4px 12px rgba(11,29,52,.08);z-index:390;display:flex;flex-direction:column;overflow:hidden;transform:translateY(20px) scale(.96);opacity:0;pointer-events:none;transition:transform .22s ease,opacity .22s ease}
+.chat-panel.open{transform:translateY(0) scale(1);opacity:1;pointer-events:auto}
+.chat-hdr{background:linear-gradient(135deg,#0B1D34 0%,#122A44 100%);color:#fff;padding:14px 18px;display:flex;align-items:center;gap:10px;flex-shrink:0}
+.chat-hdr-av{width:34px;height:34px;border-radius:10px;background:rgba(43,160,143,.25);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.chat-hdr-title{font-weight:700;font-size:.92rem;line-height:1.2}
+.chat-hdr-sub{font-size:.72rem;opacity:.7;margin-top:1px}
+.chat-hdr-close{background:rgba(255,255,255,.08);border:none;color:#fff;width:28px;height:28px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;margin-left:auto;transition:background .15s}
+.chat-hdr-close:hover{background:rgba(255,255,255,.16)}
+.chat-msgs{flex:1;overflow-y:auto;padding:18px 16px;background:#fafbfc;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth}
+.chat-bubble{max-width:80%;padding:10px 14px;border-radius:16px;font-size:.86rem;line-height:1.5;word-wrap:break-word;white-space:pre-wrap;animation:chatBubbleIn .25s ease-out}
+.chat-bubble.assistant{background:var(--t);color:#fff;align-self:flex-start;border-bottom-left-radius:4px}
+.chat-bubble.user{background:#0B1D34;color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+.chat-bubble.error{background:rgba(231,76,60,.12);color:#c0392b;align-self:flex-start;border:1px solid rgba(231,76,60,.25);border-bottom-left-radius:4px}
+@keyframes chatBubbleIn{from{transform:translateY(6px);opacity:0}to{transform:translateY(0);opacity:1}}
+.chat-typing{align-self:flex-start;background:var(--t);padding:12px 16px;border-radius:16px;border-bottom-left-radius:4px;display:flex;gap:4px}
+.chat-typing span{width:6px;height:6px;border-radius:50%;background:#fff;opacity:.6;animation:chatTyping 1.2s infinite}
+.chat-typing span:nth-child(2){animation-delay:.2s}
+.chat-typing span:nth-child(3){animation-delay:.4s}
+@keyframes chatTyping{0%,80%,100%{transform:scale(.7);opacity:.4}40%{transform:scale(1);opacity:1}}
+.chat-suggestions{padding:0 16px 12px;display:flex;flex-wrap:wrap;gap:6px;background:#fafbfc;flex-shrink:0}
+.chat-suggestion{background:#fff;border:1px solid rgba(43,160,143,.25);color:var(--t);padding:6px 12px;border-radius:18px;font-size:.76rem;font-weight:500;cursor:pointer;transition:all .15s}
+.chat-suggestion:hover{background:rgba(43,160,143,.08);border-color:var(--t)}
+.chat-input-row{padding:12px 14px;border-top:1px solid #eef0f3;background:#fff;display:flex;align-items:flex-end;gap:8px;flex-shrink:0}
+.chat-input-row textarea{flex:1;border:1px solid #e3e6ea;border-radius:18px;padding:10px 14px;font-family:inherit;font-size:.86rem;line-height:1.4;resize:none;outline:none;max-height:96px;color:var(--txt);background:#fafbfc;transition:border-color .15s}
+.chat-input-row textarea:focus{border-color:var(--t);background:#fff}
+.chat-btn-mic,.chat-btn-send{width:38px;height:38px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s}
+.chat-btn-mic{background:#f0f2f5;color:var(--t)}
+.chat-btn-mic.rec{background:#e74c3c;color:#fff;animation:pulse 1.5s infinite}
+.chat-btn-send{background:var(--t);color:#fff}
+.chat-btn-send:disabled{background:#cfd4da;cursor:not-allowed}
+.chat-btn-send:not(:disabled):hover{background:#239583}
+@media(max-width:480px){.chat-panel{right:8px;left:8px;width:auto;bottom:8px;height:calc(100vh - 16px)}.chat-fab{bottom:16px;right:16px}}
+
 /* TOAST */
 .toast-container{position:fixed;top:80px;right:24px;z-index:400;display:flex;flex-direction:column;gap:8px}
 .toast{padding:12px 18px;border-radius:var(--r);color:#fff;font-size:.84rem;font-weight:500;display:flex;align-items:center;gap:8px;animation:toastIn .4s ease,toastOut .4s ease 3.6s forwards;box-shadow:var(--sh);min-width:280px}
@@ -693,6 +730,9 @@ function App(){
   // Notifications live in state so they can be added at runtime (RDV reminders)
   // and marked-as-read without mutating the NOTIFS constant.
   const[notifs,setNotifs]=useState(()=>NOTIFS.map(n=>({...n})));
+  // Chat lives in App() so the conversation persists across page navigation.
+  const[chatMessages,setChatMessages]=useState([]);
+  const[chatSending,setChatSending]=useState(false);
   const notifiedAptsRef=useRef(new Set()); // dedup: ids of APTS we've already alerted on
 
   const addNotif=useCallback((n)=>{
@@ -756,7 +796,7 @@ function App(){
   if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending}}>
       <div className={`app${IS_EMBED?' embed':''}`}>
         {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
         <main className="main">
@@ -778,6 +818,7 @@ function App(){
         {!IS_EMBED&&<MobileNav/>}
         {!IS_EMBED&&<Chatbot/>}
         {!IS_EMBED&&<NotifPanel/>}
+        {!IS_EMBED&&<ChatWidget/>}
         {modal&&<Modal/>}
         {searchOpen&&<SearchOverlay/>}
         <div className="toast-container">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.type==='tl'?<I.Check/>:t.type==='r'?<I.Warn/>:<I.Bell/>}{t.msg}</div>)}</div>
@@ -1009,6 +1050,102 @@ function NotifPanel(){
       </div>
     </div>
   );
+}
+
+// ===== CHAT WIDGET (Claude-powered) =====
+function ChatWidget(){
+  const{chatOpen,setChatOpen,chatMessages,setChatMessages,chatSending,setChatSending,selAnimal,toast}=useContext(Ctx);
+  const[input,setInput]=useState('');
+  const dict=useDictation();
+  const msgsRef=useRef(null);
+  const inputRef=useRef(null);
+  const quickSuggestions=['Posologie médicament','Prochain RDV','Question sur un patient'];
+  const hasUserMsg=chatMessages.some(m=>m.role==='user');
+
+  // Auto-scroll to bottom on new messages or typing indicator
+  useEffect(()=>{
+    if(msgsRef.current) msgsRef.current.scrollTop=msgsRef.current.scrollHeight;
+  },[chatMessages,chatSending,chatOpen]);
+
+  // Focus input when panel opens
+  useEffect(()=>{
+    if(chatOpen) setTimeout(()=>inputRef.current&&inputRef.current.focus(),150);
+  },[chatOpen]);
+
+  const send=async(rawText)=>{
+    const text=(rawText||input).trim();
+    if(!text||chatSending) return;
+    if(dict.recording) dict.stop();
+    const next=[...chatMessages,{role:'user',content:text}];
+    setChatMessages(next);
+    setInput('');
+    setChatSending(true);
+    try{
+      const res=await fetch('/api/chat',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        // Last 19 turns (Claude API gets 20 max with the current msg added on the server)
+        body:JSON.stringify({message:text,history:chatMessages.slice(-19),animalId:selAnimal?.id||null})
+      });
+      const data=await res.json();
+      if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+      setChatMessages(m=>[...m,{role:'assistant',content:data.reply}]);
+    }catch(err){
+      setChatMessages(m=>[...m,{role:'assistant',content:`⚠ ${err.message||err}`,error:true}]);
+      toast(`Chat IA en erreur : ${err.message||err}`,'r');
+    }finally{
+      setChatSending(false);
+    }
+  };
+
+  const toggleMic=()=>{
+    if(dict.recording){dict.stop();return;}
+    if(!dict.supported){toast('Dictée non supportée — utilisez Chrome, Edge ou Safari récents.','r');return;}
+    dict.start({baseText:input,onUpdate:setInput,onError:(msg)=>toast(msg,'r')});
+  };
+
+  const onKey=(e)=>{
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}
+  };
+
+  return(<>
+    <button className={`chat-fab ${chatOpen?'hidden':''}`} onClick={()=>setChatOpen(true)} aria-label="Ouvrir l'assistant VetCopilot" title="Assistant VetCopilot">💬</button>
+    <div className={`chat-panel ${chatOpen?'open':''}`} role="dialog" aria-label="Assistant VetCopilot">
+      <div className="chat-hdr">
+        <div className="chat-hdr-av">🩺</div>
+        <div>
+          <div className="chat-hdr-title">VetCopilot Assistant</div>
+          <div className="chat-hdr-sub">{chatSending?'Réfléchit...':'IA prête à vous aider'}</div>
+        </div>
+        <button className="chat-hdr-close" onClick={()=>setChatOpen(false)} aria-label="Fermer le chat">×</button>
+      </div>
+      <div className="chat-msgs" ref={msgsRef}>
+        {!hasUserMsg&&<div className="chat-bubble assistant">Bonjour Dr. Martin, comment puis-je vous aider ?</div>}
+        {chatMessages.map((m,i)=>(
+          <div key={i} className={`chat-bubble ${m.error?'error':m.role}`}>{m.content}</div>
+        ))}
+        {chatSending&&<div className="chat-typing"><span/><span/><span/></div>}
+      </div>
+      {!hasUserMsg&&<div className="chat-suggestions">
+        {quickSuggestions.map(s=>(
+          <button key={s} className="chat-suggestion" onClick={()=>send(s)}>{s}</button>
+        ))}
+      </div>}
+      <div className="chat-input-row">
+        <textarea
+          ref={inputRef}
+          rows={1}
+          placeholder="Pose une question à VetCopilot..."
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={onKey}
+          disabled={chatSending}
+        />
+        <button className={`chat-btn-mic ${dict.recording?'rec':''}`} onClick={toggleMic} title={dict.recording?"Arrêter la dictée":"Démarrer la dictée vocale"} aria-label="Dictée vocale"><I.Mic/></button>
+        <button className="chat-btn-send" onClick={()=>send()} disabled={chatSending||!input.trim()} title="Envoyer" aria-label="Envoyer"><I.Send/></button>
+      </div>
+    </div>
+  </>);
 }
 
 // ===== MOBILE NAV =====
