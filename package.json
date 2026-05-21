@@ -14,7 +14,8 @@
     "@anthropic-ai/sdk": "^0.97.1",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "pdfkit": "^0.18.0"
   },
   "engines": {
     "node": ">=18"

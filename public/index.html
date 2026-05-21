@@ -565,6 +565,39 @@ const CHAT_INIT=[{r:'bot',t:"Bonjour Dr. Martin ! Je suis VetCopilot AI. Posez-m
 const Ctx=createContext();
 const stL={confirmed:'Confirmé',ok:'Confirmé',wait:'En attente',urg:'Urgent',done:'Terminé',soon:'Programmé',late:'En retard',pending:'En attente',paid:'Payé',overdue:'Impayé'};
 
+// ===== PDF EXPORT HELPER =====
+// POSTs a JSON body to `url`, expects a PDF blob back, triggers a download.
+// Throws on HTTP error so the caller can toast.
+async function downloadPdf({url, body, filename}){
+  const res = await fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    let detail = `HTTP ${res.status}`;
+    try{ const j = await res.json(); if(j && j.error) detail = j.error; }catch(_){}
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objUrl;
+  a.download = filename || 'document.pdf';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{URL.revokeObjectURL(objUrl); a.remove();}, 1000);
+}
+
+// Strip diacritics + non-filename chars for filenames like CR_Mme_Bernard_2026-05-21.pdf
+function safeFilename(s){
+  return String(s||'inconnu').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'_').replace(/^_+|_+$/g,'').slice(0,60) || 'inconnu';
+}
+function todayISO(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
 // ===== VOICE DICTATION (Web Speech API) =====
 // Thin wrapper around webkitSpeechRecognition / SpeechRecognition. The result
 // callback receives the full updated text (base + finalized + interim) so the
@@ -1273,6 +1306,17 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
   const topHypo=diagResult&&diagResult.hypotheses&&diagResult.hypotheses[0];
   const dateStr=new Date().toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});
   const dateLong=new Date().toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
+  const exportSoapPdf=async()=>{
+    if(!soap){toast('Pas de compte rendu à exporter','r');return;}
+    try{
+      await downloadPdf({
+        url:'/api/soap/export-pdf',
+        body:{patient:{nm:an.nm,sp:an.sp,breed:an.breed,age:an.age,sex:an.sex,wt:an.wt,owner:an.owner,phone:an.phone},soap,ownerSummary,date:dateStr,vet:'Dr. Jean Martin'},
+        filename:`CR_${safeFilename(an.nm)}_${todayISO()}.pdf`
+      });
+      toast('PDF généré','tl');
+    }catch(err){toast(`Export PDF échoué : ${err.message||err}`,'r');}
+  };
   useEffect(()=>{
     let cancelled=false;
     setGen(true);setError('');setSoap(null);setOwnerSummary('');
@@ -1320,7 +1364,7 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
           <div className="c-title">Compte rendu vétérinaire</div>
           <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:2}}>Document technique — Usage professionnel</div>
         </div>
-        <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o"><I.Down/></button><button className="btn btn-icon btn-o"><I.Print/></button></div>
+        <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o" onClick={exportSoapPdf} title="Exporter en PDF"><I.Down/></button><button className="btn btn-icon btn-o" title="Imprimer" onClick={()=>window.print()}><I.Print/></button></div>
       </div>
 
       <div style={{background:'linear-gradient(135deg,rgba(11,29,52,.03),rgba(43,160,143,.03))',borderRadius:'var(--r)',padding:24,border:'1px solid rgba(43,160,143,.1)'}}>
@@ -1368,7 +1412,7 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
           <div className="c-title">Compte rendu pour le propriétaire</div>
           <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:2}}>Langage simplifié — À remettre au propriétaire</div>
         </div>
-        <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o"><I.Down/></button><button className="btn btn-icon btn-o"><I.Print/></button><button className="btn btn-icon btn-o"><I.Mail/></button></div>
+        <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o" onClick={exportSoapPdf} title="Exporter en PDF"><I.Down/></button><button className="btn btn-icon btn-o" title="Imprimer" onClick={()=>window.print()}><I.Print/></button><button className="btn btn-icon btn-o" title="Envoyer par email"><I.Mail/></button></div>
       </div>
 
       <div style={{background:'var(--bg)',borderRadius:'var(--r)',padding:26,border:'1px solid var(--lg)'}}>
@@ -1685,7 +1729,16 @@ function Diagnostic(){
           </div>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             <button className="btn btn-t btn-lg" onClick={analyze} disabled={analyzing}>{analyzing?<><div style={{width:14,height:14,border:'2px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/> Analyse en cours...</>:<><I.Spark/> Lancer l'analyse IA</>}</button>
-            {results&&<button className="btn btn-g btn-sm"><I.Down/> Exporter PDF</button>}
+            {results&&<button className="btn btn-g btn-sm" onClick={async()=>{
+              try{
+                await downloadPdf({
+                  url:'/api/diagnostic/export-pdf',
+                  body:{patient:an?{nm:an.nm,sp:an.sp,breed:an.breed,age:an.age,sex:an.sex,wt:an.wt,owner:an.owner,phone:an.phone}:null, symptoms, result:results, date:new Date().toLocaleDateString('fr-FR')},
+                  filename:`Diagnostic_${safeFilename(an?an.nm:'patient')}_${todayISO()}.pdf`
+                });
+                toast('PDF généré','tl');
+              }catch(err){toast(`Export PDF échoué : ${err.message||err}`,'r');}
+            }}><I.Down/> Exporter PDF</button>}
           </div>
         </div>
         {analyzing&&<div className="c af" style={{textAlign:'center',padding:40}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--t)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Analyse IA en cours...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:4}}>Corrélation avec le dossier de {an.nm}</p></div>}
@@ -1950,6 +2003,21 @@ function Reports(){
   };
   const retryPreview=()=>{ if(preview){ setCache(prev=>{const c={...prev};delete c[preview.nm];return c;}); openPreview(preview);} };
   const cached=preview?cache[preview.nm]:null;
+  const exportPreviewPdf=async()=>{
+    if(!cached||!preview){toast('Génère d\'abord le compte rendu','r');return;}
+    try{
+      const an=ANIMALS.find(a=>a.nm===preview.nm);
+      const patient=an
+        ?{nm:an.nm,sp:an.sp,breed:an.breed,age:an.age,sex:an.sex,wt:an.wt,owner:an.owner,phone:an.phone}
+        :{nm:preview.nm,sp:'',owner:preview.owner};
+      await downloadPdf({
+        url:'/api/soap/export-pdf',
+        body:{patient,soap:cached.soap,ownerSummary:cached.ownerSummary,date:preview.dt,vet:preview.vet},
+        filename:`CR_${safeFilename(preview.nm)}_${todayISO()}.pdf`
+      });
+      toast('PDF généré','tl');
+    }catch(err){toast(`Export PDF échoué : ${err.message||err}`,'r');}
+  };
   return(<div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
       <div className="tabs" style={{marginBottom:0,maxWidth:350}}>
@@ -2002,7 +2070,7 @@ function Reports(){
       {!loading&&!error&&cached&&previewTab==='vet'&&<div className="c af1">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <div className="c-title">Compte rendu vétérinaire</div>
-          <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o"><I.Down/></button><button className="btn btn-icon btn-o"><I.Print/></button></div>
+          <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o" onClick={exportPreviewPdf} title="Exporter en PDF"><I.Down/></button><button className="btn btn-icon btn-o" title="Imprimer" onClick={()=>window.print()}><I.Print/></button></div>
         </div>
         <div style={{background:'linear-gradient(135deg,rgba(11,29,52,.03),rgba(43,160,143,.03))',borderRadius:'var(--r)',padding:22,border:'1px solid rgba(43,160,143,.1)'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:12,borderBottom:'1px solid var(--lg)'}}>
@@ -2022,7 +2090,7 @@ function Reports(){
       {!loading&&!error&&cached&&previewTab==='own'&&<div className="c af1">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <div className="c-title">Compte rendu propriétaire</div>
-          <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o"><I.Down/></button><button className="btn btn-icon btn-o"><I.Print/></button><button className="btn btn-icon btn-o"><I.Mail/></button></div>
+          <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o" onClick={exportPreviewPdf} title="Exporter en PDF"><I.Down/></button><button className="btn btn-icon btn-o" title="Imprimer" onClick={()=>window.print()}><I.Print/></button><button className="btn btn-icon btn-o" title="Envoyer par email"><I.Mail/></button></div>
         </div>
         <div style={{background:'var(--bg)',borderRadius:'var(--r)',padding:24,border:'1px solid var(--lg)'}}>
           <div style={{textAlign:'center',marginBottom:18,paddingBottom:14,borderBottom:'1px dashed var(--lg)'}}>
