@@ -1902,8 +1902,37 @@ function Reports(){
   const[tab,setTab]=useState('pending');
   const[preview,setPreview]=useState(null);
   const[previewTab,setPreviewTab]=useState('vet');
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState('');
+  // Cache generated SOAPs per patient name so re-opening a preview doesn't
+  // re-hit Claude (and burn ~30s + tokens) each time.
+  const[cache,setCache]=useState({});
   const pending=[{nm:'Luna',em:'🐈',dt:"Aujourd'hui",type:'Bilan thyroïdien',vet:'Dr. Martin',owner:'M. Garcia',breed:'Siamois',age:'7 ans',wt:'3.8 kg'},{nm:'Coco',em:'🐦',dt:'Hier',type:'Contrôle respiratoire',vet:'Dr. Martin',owner:'M. Lefevre',breed:'Ara bleu',age:'12 ans',wt:'1.1 kg'},{nm:'Nuage',em:'🐰',dt:'09/05/2026',type:'Vérification dentaire',vet:'Dr. Durand',owner:'Mme Moreau',breed:'Bélier nain',age:'2 ans',wt:'1.8 kg'}];
   const archived=[{nm:'Rex',em:'🐕',dt:'05/05/2026',type:'Gastro-entérite',vet:'Dr. Martin',st:'Validé',owner:'M. Dupont'},{nm:'Bella',em:'🐕',dt:'01/05/2026',type:'Contrôle arthrose',vet:'Dr. Durand',st:'Envoyé',owner:'M. Petit'},{nm:'Simba',em:'🐈',dt:'28/04/2026',type:'Suivi cystite',vet:'Dr. Martin',st:'Validé',owner:'Mme Dubois'}];
+
+  const openPreview=async(r)=>{
+    setPreview(r);setPreviewTab('vet');setError('');
+    if(cache[r.nm]) return; // already generated for this patient
+    setLoading(true);
+    try{
+      const animal=ANIMALS.find(a=>a.nm===r.nm);
+      const res=await fetch('/api/soap/generate',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({animalId:animal?animal.id:null,motif:r.type,examen:'',hypothese:'',traitement:''})
+      });
+      const data=await res.json();
+      if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+      setCache(prev=>({...prev,[r.nm]:{soap:data.soap,ownerSummary:data.ownerSummary||''}}));
+    }catch(err){
+      setError(err.message||String(err));
+      toast(`Génération IA échouée : ${err.message||err}`,'r');
+    }finally{
+      setLoading(false);
+    }
+  };
+  const retryPreview=()=>{ if(preview){ setCache(prev=>{const c={...prev};delete c[preview.nm];return c;}); openPreview(preview);} };
+  const cached=preview?cache[preview.nm]:null;
   return(<div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
       <div className="tabs" style={{marginBottom:0,maxWidth:350}}>
@@ -1918,7 +1947,7 @@ function Reports(){
         <div style={{width:42,height:42,borderRadius:11,background:'rgba(200,164,92,.08)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.1rem'}}>{r.em}</div>
         <div style={{flex:1,minWidth:150}}><div style={{fontWeight:600,color:'var(--txt)'}}>{r.nm} — {r.type}</div><div style={{fontSize:'.76rem',color:'var(--txt2)'}}>{r.dt} · {r.vet} · {r.owner}</div></div>
         <div style={{display:'flex',gap:6}}>
-          <button className="btn btn-o btn-sm" onClick={()=>{setPreview(r);setPreviewTab('vet');}}><I.Eye/> Aperçu</button>
+          <button className="btn btn-o btn-sm" onClick={()=>openPreview(r)}><I.Eye/> Générer</button>
           <button className="btn btn-t btn-sm" onClick={()=>toast(`CR de ${r.nm} validé`,'tl')}><I.Check/> Valider</button>
           <button className="btn btn-sm btn-ghost"><I.Print/></button>
         </div>
@@ -1931,7 +1960,7 @@ function Reports(){
         <div style={{flex:1,minWidth:150}}><div style={{fontWeight:600,color:'var(--txt)'}}>{r.nm} — {r.type}</div><div style={{fontSize:'.76rem',color:'var(--txt2)'}}>{r.dt} · {r.vet} · {r.owner}</div></div>
         <span className="tag tag-t">{r.st}</span>
         <div style={{display:'flex',gap:6}}>
-          <button className="btn btn-sm btn-o" onClick={()=>{setPreview(r);setPreviewTab('vet');}}><I.Eye/></button>
+          <button className="btn btn-sm btn-o" onClick={()=>openPreview(r)}><I.Eye/></button>
           <button className="btn btn-sm btn-ghost"><I.Down/></button>
           <button className="btn btn-sm btn-ghost"><I.Print/></button>
         </div>
@@ -1949,7 +1978,11 @@ function Reports(){
         <button className={`tab ${previewTab==='own'?'on':''}`} onClick={()=>setPreviewTab('own')}>👤 Compte rendu propriétaire</button>
       </div>
 
-      {previewTab==='vet'&&<div className="c af1">
+      {loading&&<div className="c af1" style={{textAlign:'center',padding:50}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--g)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Génération IA du compte rendu...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:6}}>Rédaction des sections SOAP + résumé propriétaire pour {preview.nm}...</p></div>}
+
+      {!loading&&error&&<div className="c af1" style={{padding:30,textAlign:'center'}}><div style={{fontSize:'1.4rem',marginBottom:8}}>⚠️</div><div style={{fontWeight:600,color:'#e74c3c',marginBottom:6}}>Impossible de générer le compte rendu</div><p style={{fontSize:'.84rem',color:'var(--txt2)',marginBottom:14}}>{error}</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><button className="btn btn-o" onClick={retryPreview}>Réessayer</button><button className="btn btn-ghost" onClick={()=>setPreview(null)}>Retour</button></div></div>}
+
+      {!loading&&!error&&cached&&previewTab==='vet'&&<div className="c af1">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <div className="c-title">Compte rendu vétérinaire</div>
           <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o"><I.Down/></button><button className="btn btn-icon btn-o"><I.Print/></button></div>
@@ -1960,16 +1993,16 @@ function Reports(){
             <div style={{textAlign:'right',fontSize:'.74rem',color:'var(--txt2)'}}><div>Date : {preview.dt}</div></div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16,padding:12,background:'var(--bg)',borderRadius:10}}>
-            <div><div style={{fontSize:'.66rem',fontWeight:700,textTransform:'uppercase',color:'var(--mg)',marginBottom:3}}>Patient</div><div style={{fontSize:'.84rem',fontWeight:600,color:'var(--txt)'}}>{preview.nm} — {preview.breed||''}, {preview.age||''}</div></div>
+            <div><div style={{fontSize:'.66rem',fontWeight:700,textTransform:'uppercase',color:'var(--mg)',marginBottom:3}}>Patient</div><div style={{fontSize:'.84rem',fontWeight:600,color:'var(--txt)'}}>{preview.nm} — {preview.breed||''}{preview.age?', '+preview.age:''}</div></div>
             <div><div style={{fontSize:'.66rem',fontWeight:700,textTransform:'uppercase',color:'var(--mg)',marginBottom:3}}>Propriétaire</div><div style={{fontSize:'.84rem',fontWeight:600,color:'var(--txt)'}}>{preview.owner}</div></div>
           </div>
-          {[{t:'Motif',ic:'📋',c:`${preview.type} — Consultation de routine.`},{t:'Examen clinique',ic:'🔍',c:`Examen clinique complet réalisé. Constantes dans les normes. État général bon.`},{t:'Diagnostic',ic:'🧠',c:`Diagnostic en lien avec ${preview.type.toLowerCase()}. Examens complémentaires réalisés selon protocole.`},{t:'Traitement',ic:'💊',c:`Traitement adapté prescrit. Voir ordonnance jointe.`},{t:'Suivi',ic:'📅',c:`Contrôle recommandé selon le protocole standard.`}].map((s,i)=>(
-            <div key={i} style={{marginBottom:14}}><div style={{display:'flex',alignItems:'center',gap:5,marginBottom:6}}><span style={{fontSize:'.85rem'}}>{s.ic}</span><div style={{fontSize:'.72rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--t)'}}>{s.t}</div></div><p style={{fontSize:'.82rem',lineHeight:1.7,color:'var(--txt)',paddingLeft:20}}>{s.c}</p></div>
+          {[{t:'Subjectif — motif & anamnèse',ic:'📋',c:cached.soap.S},{t:'Objectif — examen clinique',ic:'🔍',c:cached.soap.O},{t:'Analyse — suspicion diagnostique',ic:'🧠',c:cached.soap.A},{t:'Plan — examens, traitement, suivi',ic:'💊',c:cached.soap.P}].map((s,i)=>(
+            <div key={i} style={{marginBottom:14}}><div style={{display:'flex',alignItems:'center',gap:5,marginBottom:6}}><span style={{fontSize:'.85rem'}}>{s.ic}</span><div style={{fontSize:'.72rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--t)'}}>{s.t}</div></div><p style={{fontSize:'.82rem',lineHeight:1.7,color:'var(--txt)',paddingLeft:20,whiteSpace:'pre-wrap'}}>{s.c}</p></div>
           ))}
         </div>
       </div>}
 
-      {previewTab==='own'&&<div className="c af1">
+      {!loading&&!error&&cached&&previewTab==='own'&&<div className="c af1">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <div className="c-title">Compte rendu propriétaire</div>
           <div style={{display:'flex',gap:4}}><button className="btn btn-icon btn-o"><I.Down/></button><button className="btn btn-icon btn-o"><I.Print/></button><button className="btn btn-icon btn-o"><I.Mail/></button></div>
@@ -1981,15 +2014,11 @@ function Reports(){
             <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Consultation du {preview.dt}</div>
           </div>
           <div style={{fontSize:'.88rem',lineHeight:1.85,color:'var(--txt)'}}>
-            <p>Cher(e) {preview.owner},</p>
-            <p style={{marginTop:10}}>Suite à la consultation de <strong>{preview.nm}</strong> pour un(e) <strong>{preview.type.toLowerCase()}</strong>, voici un résumé de notre visite.</p>
+            <p>{preview.owner.startsWith('Mme')?'Chère ':'Cher '}{preview.owner},</p>
+            <p style={{marginTop:10}}>Suite à la consultation de <strong>{preview.nm}</strong>, voici un résumé de notre visite.</p>
             <div style={{background:'rgba(43,160,143,.05)',borderRadius:10,padding:14,margin:'14px 0',borderLeft:'3px solid var(--t)'}}>
-              <div style={{fontWeight:700,color:'var(--t)',fontSize:'.8rem',marginBottom:4}}>Ce que nous avons constaté</div>
-              <p>{preview.nm} a été examiné(e) en détail. L'examen clinique a été réalisé et les résultats vous seront communiqués lors du prochain rendez-vous.</p>
-            </div>
-            <div style={{background:'rgba(43,160,143,.08)',borderRadius:10,padding:14,margin:'14px 0',border:'1.5px solid rgba(43,160,143,.2)'}}>
-              <div style={{fontWeight:700,color:'var(--t)',fontSize:'.84rem',marginBottom:4}}>📅 Prochain rendez-vous à prévoir</div>
-              <p style={{fontSize:'.82rem'}}>Merci de prendre rendez-vous au 01 23 45 67 89 pour le suivi de {preview.nm}.</p>
+              <div style={{fontWeight:700,color:'var(--t)',fontSize:'.8rem',marginBottom:4}}>Résumé de la consultation</div>
+              <p style={{whiteSpace:'pre-wrap'}}>{cached.ownerSummary}</p>
             </div>
             <p style={{marginTop:14}}>Cordialement,<br/><strong>{preview.vet}</strong><br/><span style={{fontSize:'.8rem',color:'var(--txt2)'}}>Clinique VetCopilot</span></p>
           </div>
