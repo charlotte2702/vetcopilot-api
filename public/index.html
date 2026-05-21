@@ -684,6 +684,34 @@ function playNotifBeep(){
   }catch(_){}
 }
 
+// ===== IMAGE RESIZE (for animal photos) =====
+// Resize the uploaded file via canvas to keep localStorage usage modest.
+// 400 px on the long edge + JPEG 85% gives ~30–60 KB per photo, so the 8
+// patients comfortably stay under the ~5 MB localStorage budget.
+function resizeImageFile(file, maxDim = 400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) {
+      return reject(new Error('Le fichier doit être une image'));
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      try { resolve(canvas.toDataURL('image/jpeg', quality)); }
+      catch (err) { reject(err); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Impossible de lire l'image")); };
+    img.src = url;
+  });
+}
+
 // ===== VOICE DICTATION (Web Speech API) =====
 // Thin wrapper around webkitSpeechRecognition / SpeechRecognition. The result
 // callback receives the full updated text (base + finalized + interim) so the
@@ -736,6 +764,29 @@ const EMBED_PARAMS=new URLSearchParams(window.location.search);
 const EMBED_PAGE=EMBED_PARAMS.get('embed');
 const IS_EMBED=!!EMBED_PAGE;
 
+// Lookup helper for places that hold an appointment-style record (with `nm`
+// and `av` but no canonical animal id). Returns the matching ANIMALS entry so
+// the avatar can find the photo, or a stub with no id that just shows the emoji.
+function animalByName(name, fallbackAv){
+  return ANIMALS.find(a=>a.nm===name)||{av:fallbackAv};
+}
+
+// ===== ANIMAL AVATAR =====
+// Drop-in replacement for the `{Em[a.av]}` pattern. Returns the inner content
+// (img or emoji span) — the caller keeps its existing wrapper styles (size,
+// background, rounded corners). When a photo exists in the Ctx photo map, the
+// img fills the wrapper with a teal circular border; otherwise the species
+// emoji is rendered.
+function AnimalAvatar({animal}){
+  const{animalPhotos}=useContext(Ctx);
+  if(!animal) return null;
+  const photo=animal.id!=null?animalPhotos[animal.id]:null;
+  if(photo){
+    return <img src={photo} alt={animal.nm||''} style={{width:'100%',height:'100%',objectFit:'cover',borderRadius:'50%',border:'2px solid var(--t)',boxSizing:'border-box',display:'block'}}/>;
+  }
+  return <>{Em[animal.av]||'🐾'}</>;
+}
+
 // ===== APP =====
 function App(){
   const[page,setPage]=useState(IS_EMBED?EMBED_PAGE:'login');
@@ -753,6 +804,27 @@ function App(){
   // Chat lives in App() so the conversation persists across page navigation.
   const[chatMessages,setChatMessages]=useState([]);
   const[chatSending,setChatSending]=useState(false);
+  // Animal photos: { [animalId]: dataUrl }. Persisted in localStorage so a
+  // refresh doesn't wipe the photos. Mocked data layer for now — easy to swap
+  // for a real backend endpoint later.
+  const PHOTOS_KEY='vetcopilot:animal-photos';
+  const[animalPhotos,setAnimalPhotos]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(PHOTOS_KEY)||'{}');}catch(_){return{};}
+  });
+  const setAnimalPhoto=useCallback((id,dataUrl)=>{
+    setAnimalPhotos(prev=>{
+      const next={...prev,[id]:dataUrl};
+      try{localStorage.setItem(PHOTOS_KEY,JSON.stringify(next));}catch(_){/* quota — silently skip */}
+      return next;
+    });
+  },[]);
+  const removeAnimalPhoto=useCallback((id)=>{
+    setAnimalPhotos(prev=>{
+      const next={...prev};delete next[id];
+      try{localStorage.setItem(PHOTOS_KEY,JSON.stringify(next));}catch(_){}
+      return next;
+    });
+  },[]);
   const notifiedAptsRef=useRef(new Set()); // dedup: ids of APTS we've already alerted on
 
   const addNotif=useCallback((n)=>{
@@ -816,7 +888,7 @@ function App(){
   if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto}}>
       <div className={`app${IS_EMBED?' embed':''}`}>
         {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
         <main className="main">
@@ -1339,7 +1411,7 @@ function Dashboard(){
           {APTS.slice(0,5).map(a=>(
             <div key={a.id} className="apt apt-bg" onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
               <div className="apt-time">{a.t}</div>
-              <div className={`apt-av ${a.av}`}>{Em[a.av]}</div>
+              <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
               <div style={{flex:1,minWidth:0}}><div className="apt-nm">{a.nm}</div><div className="apt-dt">{a.rsn} — {a.own}</div></div>
               <span className={`apt-st ${a.st}`}>{stL[a.st]}</span>
             </div>
@@ -1743,7 +1815,7 @@ function Schedule(){
       {filtered.map(a=>(
         <div key={a.id} className="apt apt-bg" style={{marginBottom:4}} onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
           <div className="apt-time">{a.t}</div>
-          <div className={`apt-av ${a.av}`}>{Em[a.av]}</div>
+          <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
           <div style={{flex:1,minWidth:0}}><div className="apt-nm">{a.nm} <span style={{fontWeight:400,color:'var(--txt2)',fontSize:'.78rem'}}>— {a.vet}</span></div><div className="apt-dt">{a.rsn} · {a.own} · {a.dur} min</div></div>
           <span className={`apt-st ${a.st}`}>{stL[a.st]}</span>
         </div>
@@ -1787,7 +1859,7 @@ function Animals(){
       <table className="tbl"><thead><tr><th>Animal</th><th>Espèce / Race</th><th>Âge</th><th>Sexe</th><th>Poids</th><th>Propriétaire</th><th>Statut</th><th></th></tr></thead>
         <tbody>{filtered.map(a=>(
           <tr key={a.id} style={{cursor:'pointer'}} onClick={()=>nav('animal-detail',a)}>
-            <td><div style={{display:'flex',alignItems:'center',gap:9}}><div className={`apt-av ${a.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem'}}>{Em[a.av]}</div><span style={{fontWeight:600}}>{a.nm}</span></div></td>
+            <td><div style={{display:'flex',alignItems:'center',gap:9}}><div className={`apt-av ${a.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem'}}><AnimalAvatar animal={a}/></div><span style={{fontWeight:600}}>{a.nm}</span></div></td>
             <td>{a.sp} · {a.breed}</td><td>{a.age}</td><td>{a.sex==='M'?'♂':'♀'}</td><td>{a.wt}</td><td>{a.owner}</td>
             <td>{a.allergy.length>0&&<span className="tag tag-r" style={{marginRight:4}}>⚠ Allergies</span>}<span className="tag tag-t">À jour</span></td>
             <td style={{color:'var(--mg)'}}><I.ChevR/></td>
@@ -1800,9 +1872,24 @@ function Animals(){
 
 // ===== ANIMAL DETAIL =====
 function AnimalDetail(){
-  const{selAnimal,nav,toast,setModal}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const{selAnimal,nav,toast,setModal,animalPhotos,setAnimalPhoto,removeAnimalPhoto}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
   const[tab,setTab]=useState('overview');
   const chartRef=useRef(null);const chartInst=useRef(null);
+  const photoInputRef=useRef(null);
+  const hasPhoto=!!animalPhotos[a.id];
+  const onPhotoPick=async(e)=>{
+    const f=e.target.files&&e.target.files[0];
+    e.target.value='';
+    if(!f) return;
+    if(!f.type.startsWith('image/')){toast('Sélectionnez une image (JPEG ou PNG)','r');return;}
+    if(f.size>10*1024*1024){toast('Image trop volumineuse (max 10 MB avant redimensionnement)','r');return;}
+    try{
+      const dataUrl=await resizeImageFile(f,400,0.85);
+      setAnimalPhoto(a.id,dataUrl);
+      toast(`Photo de ${a.nm} mise à jour`,'tl');
+    }catch(err){toast(`Erreur : ${err.message||err}`,'r');}
+  };
+  const onPhotoRemove=()=>{removeAnimalPhoto(a.id);toast(`Photo de ${a.nm} supprimée`,'tl');};
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   useEffect(()=>{
     if(tab==='overview'&&chartRef.current){
@@ -1818,7 +1905,20 @@ function AnimalDetail(){
     <button className="btn btn-sm btn-o" style={{marginBottom:16}} onClick={()=>nav('animals')}>← Retour aux patients</button>
     <div className="c af" style={{marginBottom:18}}>
       <div style={{display:'flex',gap:22,alignItems:'flex-start',flexWrap:'wrap'}}>
-        <div style={{width:90,height:90,borderRadius:'var(--rl)',background:'linear-gradient(135deg,var(--t),var(--g))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'2.5rem',flexShrink:0}}>{Em[a.av]}</div>
+        <div style={{position:'relative',flexShrink:0}}>
+          <div role="button" tabIndex={0} aria-label="Modifier la photo"
+            onClick={()=>photoInputRef.current&&photoInputRef.current.click()}
+            onKeyDown={(e)=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();photoInputRef.current&&photoInputRef.current.click();}}}
+            style={{width:90,height:90,borderRadius:'var(--rl)',background:hasPhoto?'transparent':'linear-gradient(135deg,var(--t),var(--g))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'2.5rem',cursor:'pointer',overflow:'hidden',transition:'transform .15s,box-shadow .15s'}}
+            onMouseEnter={(e)=>e.currentTarget.style.boxShadow='0 0 0 3px rgba(43,160,143,.25)'}
+            onMouseLeave={(e)=>e.currentTarget.style.boxShadow='none'}>
+            <AnimalAvatar animal={a}/>
+          </div>
+          {/* Small camera badge over the avatar */}
+          <div aria-hidden="true" style={{position:'absolute',bottom:-4,right:-4,width:26,height:26,borderRadius:'50%',background:'var(--t)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'.8rem',boxShadow:'0 2px 6px rgba(0,0,0,.18)',border:'2px solid var(--card)',pointerEvents:'none'}}>📷</div>
+          <input ref={photoInputRef} type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={onPhotoPick}/>
+          {hasPhoto&&<button onClick={onPhotoRemove} className="btn btn-sm btn-ghost" style={{position:'absolute',top:-10,right:-10,width:22,height:22,padding:0,borderRadius:'50%',background:'#fff',color:'#e74c3c',border:'1px solid var(--lg)',fontSize:'.74rem',lineHeight:1,cursor:'pointer',boxShadow:'0 2px 6px rgba(0,0,0,.12)'}} title="Supprimer la photo" aria-label={`Supprimer la photo de ${a.nm}`}>×</button>}
+        </div>
         <div style={{flex:1,minWidth:200}}>
           <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:3,flexWrap:'wrap'}}>
             <h2 style={{fontFamily:'var(--fh)',fontSize:'1.5rem',color:'var(--txt)'}}>{a.nm}</h2>
@@ -2323,7 +2423,7 @@ function Diagnostic(){
         <div className="c c-dark af1">
           <div className="c-label" style={{color:'var(--t)'}}>Patient sélectionné</div>
           <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
-            <div style={{width:44,height:44,borderRadius:12,background:'rgba(43,160,143,.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.3rem'}}>{Em[an.av]}</div>
+            <div style={{width:44,height:44,borderRadius:12,background:'rgba(43,160,143,.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.3rem',overflow:'hidden'}}><AnimalAvatar animal={an}/></div>
             <div><div style={{fontWeight:700,fontSize:'1.05rem'}}>{an.nm}</div><div style={{fontSize:'.78rem',opacity:.6}}>{an.breed} · {an.age} · {an.wt}</div></div>
           </div>
           {an.allergy.length>0&&<div style={{background:'rgba(231,76,60,.12)',borderRadius:10,padding:'8px 12px',marginBottom:10}}><div style={{fontSize:'.74rem',fontWeight:700,color:'#e74c3c'}}>⚠ Allergies</div><div style={{fontSize:'.82rem',marginTop:2}}>{an.allergy.join(', ')}</div></div>}
