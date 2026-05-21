@@ -598,6 +598,35 @@ function todayISO(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+// ===== APPOINTMENT REMINDERS / WEB NOTIFICATIONS =====
+// Returns a Date today at HH:MM (24h). APTS data has only the time string, so
+// we assume "today" — sufficient for the demo, easy to extend with a date column.
+function aptDateToday(timeStr){
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr||''));
+  if(!m) return null;
+  const d = new Date();
+  d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+  return d;
+}
+
+// Short A5 beep via Web Audio API — no external asset needed. Silently no-ops
+// if AudioContext is unavailable or blocked by autoplay policy.
+function playNotifBeep(){
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return;
+    const ctx = new AC();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'sine'; osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
+    osc.start(); osc.stop(ctx.currentTime + 0.28);
+    setTimeout(()=>{try{ctx.close();}catch(_){}}, 500);
+  }catch(_){}
+}
+
 // ===== VOICE DICTATION (Web Speech API) =====
 // Thin wrapper around webkitSpeechRecognition / SpeechRecognition. The result
 // callback receives the full updated text (base + finalized + interim) so the
@@ -661,6 +690,17 @@ function App(){
   const[modal,setModal]=useState(null);
   const[dark,setDark]=useState(IS_EMBED?true:false);
   const[searchOpen,setSearchOpen]=useState(false);
+  // Notifications live in state so they can be added at runtime (RDV reminders)
+  // and marked-as-read without mutating the NOTIFS constant.
+  const[notifs,setNotifs]=useState(()=>NOTIFS.map(n=>({...n})));
+  const notifiedAptsRef=useRef(new Set()); // dedup: ids of APTS we've already alerted on
+
+  const addNotif=useCallback((n)=>{
+    setNotifs(prev=>prev.some(p=>p.id===n.id)?prev:[n,...prev]);
+  },[]);
+  const markAllRead=useCallback(()=>{
+    setNotifs(prev=>prev.map(n=>n.unread?{...n,unread:false}:n));
+  },[]);
 
   useEffect(()=>{document.documentElement.setAttribute('data-theme',dark?'dark':'light');},[dark]);
   useEffect(()=>{
@@ -669,13 +709,54 @@ function App(){
   },[]);
   useEffect(()=>{if(IS_EMBED)document.body.classList.add('embed-mode');},[]);
 
+  // Ask for Web Notification permission once on mount (only once per browser/session;
+  // the browser will silently no-op the prompt after the user's choice).
+  useEffect(()=>{
+    if(typeof Notification!=='undefined' && Notification.permission==='default'){
+      // Defer so we don't prompt mid-render — better UX.
+      const t=setTimeout(()=>{try{Notification.requestPermission();}catch(_){}}, 1200);
+      return()=>clearTimeout(t);
+    }
+  },[]);
+
+  // Poll every 60s: for each appointment within 4.5–5.5 min of "now", fire one
+  // browser notification + beep + in-app notif. The 1-min window covers polling
+  // jitter so we don't miss the 5-min mark.
+  useEffect(()=>{
+    const check=()=>{
+      const now=new Date();
+      for(const apt of APTS){
+        const at=aptDateToday(apt.t);
+        if(!at) continue;
+        const diffMin=(at.getTime()-now.getTime())/60000;
+        if(diffMin<4.5||diffMin>5.5) continue;
+        const key=`apt-${apt.id}-${at.toDateString()}`;
+        if(notifiedAptsRef.current.has(key)) continue;
+        notifiedAptsRef.current.add(key);
+
+        const title='RDV dans 5 min';
+        const body=`Consultation avec ${apt.nm} — ${apt.rsn}`;
+        try{
+          if(typeof Notification!=='undefined' && Notification.permission==='granted'){
+            new Notification(title,{body,icon:'/icon-192.png',tag:key});
+          }
+        }catch(_){}
+        playNotifBeep();
+        addNotif({id:'rem-'+apt.id+'-'+at.getTime(),type:'apt',title,text:body,time:"À l'instant",unread:true});
+      }
+    };
+    check(); // initial check on mount so a freshly-opened app catches a near RDV
+    const iv=setInterval(check,60_000);
+    return()=>clearInterval(iv);
+  },[addNotif]);
+
   const nav=useCallback((p,d)=>{setPage(p);if(d)setSelAnimal(d);setSbOpen(false);setNotifOpen(false);setSearchOpen(false);window.scrollTo({top:0,behavior:'smooth'});},[]);
   const toast=useCallback((msg,type='tl')=>{const id=Date.now();setToasts(p=>[...p,{id,msg,type}]);setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),4200);},[]);
 
   if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead}}>
       <div className={`app${IS_EMBED?' embed':''}`}>
         {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
         <main className="main">
@@ -810,7 +891,8 @@ function Sidebar({open,onClose}){
 
 // ===== HEADER =====
 function Header({onMenu}){
-  const{page,notifOpen,setNotifOpen,dark,setDark,setSearchOpen}=useContext(Ctx);
+  const{page,notifOpen,setNotifOpen,dark,setDark,setSearchOpen,notifs}=useContext(Ctx);
+  const unreadCount=(notifs||[]).filter(n=>n.unread).length;
   const titles={dashboard:{t:'Tableau de bord',s:new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})},
     schedule:{t:'Agenda',s:'Gérer les rendez-vous'},animals:{t:'Dossiers patients',s:'Base de données patients'},
     'animal-detail':{t:'Dossier patient',s:'Détail du dossier'},diagnostic:{t:'Assistant diagnostic IA',s:'Analyse intelligente'},
@@ -833,7 +915,10 @@ function Header({onMenu}){
             <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:'100%',height:'100%'}}>{dark?<I.Moon/>:<I.Sun/>}</div>
           </div>
         </button>
-        <button className="hdr-btn" onClick={()=>setNotifOpen(!notifOpen)}><I.Bell/><span className="notif-dot"/></button>
+        <button className="hdr-btn" onClick={()=>setNotifOpen(!notifOpen)} aria-label={`Notifications (${unreadCount} non lues)`}>
+          <I.Bell/>
+          {unreadCount>0&&<span style={{position:'absolute',top:3,right:3,minWidth:16,height:16,padding:'0 4px',background:'#e74c3c',color:'#fff',borderRadius:8,border:'2px solid var(--bg)',fontSize:'.6rem',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1,boxSizing:'border-box'}}>{unreadCount>99?'99+':unreadCount}</span>}
+        </button>
       </div>
     </header>
   );
@@ -883,24 +968,42 @@ function SearchOverlay(){
 
 // ===== NOTIFICATION PANEL =====
 function NotifPanel(){
-  const{notifOpen,setNotifOpen,nav}=useContext(Ctx);
+  const{notifOpen,setNotifOpen,notifs,markAllRead}=useContext(Ctx);
+  const panelRef=useRef(null);
   const colors={urg:'#e74c3c',apt:'var(--t)',cr:'var(--g)',vacc:'#9b59b6',sys:'#0B1D34',stock:'#e67e22',pay:'#27ae60'};
   const icons={urg:'🚨',apt:'📅',cr:'✅',vacc:'💉',sys:'⚙️',stock:'📦',pay:'💳'};
+  // Close on outside click. Attach AFTER the click event that opened the panel
+  // has finished propagating (setTimeout 0) — otherwise the very click that
+  // opened the panel would also close it.
+  useEffect(()=>{
+    if(!notifOpen) return;
+    const h=(e)=>{
+      const inPanel=panelRef.current&&panelRef.current.contains(e.target);
+      // Also ignore clicks on the bell button itself so it can toggle freely.
+      const onBell=e.target.closest&&e.target.closest('.hdr-btn');
+      if(!inPanel&&!onBell) setNotifOpen(false);
+    };
+    const t=setTimeout(()=>document.addEventListener('mousedown',h),0);
+    return()=>{clearTimeout(t);document.removeEventListener('mousedown',h);};
+  },[notifOpen,setNotifOpen]);
+  const unread=(notifs||[]).filter(n=>n.unread).length;
   return(
-    <div className={`notif-panel ${notifOpen?'open':''}`}>
-      <div className="notif-hdr"><span style={{fontWeight:700,fontSize:'.92rem'}}>Notifications ({NOTIFS.filter(n=>n.unread).length})</span>
-        <button className="btn btn-sm btn-ghost" onClick={()=>setNotifOpen(false)}>Tout marquer lu</button>
+    <div ref={panelRef} className={`notif-panel ${notifOpen?'open':''}`}>
+      <div className="notif-hdr">
+        <span style={{fontWeight:700,fontSize:'.92rem'}}>Notifications {unread>0&&<span style={{color:'#e74c3c'}}>({unread})</span>}</span>
+        <button className="btn btn-sm btn-ghost" onClick={markAllRead} disabled={unread===0}>Tout marquer lu</button>
       </div>
       <div className="notif-list">
-        {NOTIFS.map(n=>(
-          <div key={n.id} className={`notif-item ${n.unread?'unread':''}`} onClick={()=>setNotifOpen(false)}>
-            <div style={{fontSize:'1.1rem',flexShrink:0,marginTop:2}}>{icons[n.type]}</div>
+        {(notifs||[]).length===0&&<div style={{padding:'30px 18px',textAlign:'center',color:'var(--txt2)',fontSize:'.84rem'}}>Aucune notification</div>}
+        {(notifs||[]).map(n=>(
+          <div key={n.id} className={`notif-item ${n.unread?'unread':''}`}>
+            <div style={{fontSize:'1.1rem',flexShrink:0,marginTop:2}}>{icons[n.type]||'🔔'}</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:600,fontSize:'.84rem',color:'var(--txt)'}}>{n.title}</div>
               <div style={{fontSize:'.76rem',color:'var(--txt2)',marginTop:2}}>{n.text}</div>
               <div style={{fontSize:'.66rem',color:'var(--txt2)',marginTop:4}}>{n.time}</div>
             </div>
-            {n.unread&&<div style={{width:8,height:8,borderRadius:'50%',background:colors[n.type],flexShrink:0}}/>}
+            {n.unread&&<div style={{width:8,height:8,borderRadius:'50%',background:colors[n.type]||'#e74c3c',flexShrink:0}}/>}
           </div>
         ))}
       </div>
