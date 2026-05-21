@@ -1065,8 +1065,10 @@ function Dashboard(){
 function ConsultationFlow(){
   const{nav,toast,setModal}=useContext(Ctx);
   const[step,setStep]=useState(0);
+  const[anId,setAnId]=useState(1);
   const[symptoms,setSymptoms]=useState('');
   const[notes,setNotes]=useState('');
+  const[diagResult,setDiagResult]=useState(null);
   const steps=['Informations','Examen','Diagnostic IA','Ordonnance','Compte rendu'];
   return(<div>
     <div className="consult-flow af">
@@ -1080,7 +1082,7 @@ function ConsultationFlow(){
 
     {step===0&&<div className="c af1" style={{maxWidth:700}}>
       <div className="c-title" style={{marginBottom:16}}>Informations du patient</div>
-      <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel">{ANIMALS.map(a=><option key={a.id}>{a.nm} — {a.sp} ({a.breed})</option>)}</select></div>
+      <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel" value={anId} onChange={e=>setAnId(Number(e.target.value))}>{ANIMALS.map(a=><option key={a.id} value={a.id}>{a.nm} — {a.sp} ({a.breed})</option>)}</select></div>
       <div className="g2">
         <div className="fg"><label className="fl">Type de consultation</label><select className="fi fi-sel"><option>Consultation générale</option><option>Suivi</option><option>Urgence</option><option>Chirurgie</option><option>Vaccination</option></select></div>
         <div className="fg"><label className="fl">Poids actuel (kg)</label><input className="fi" type="number" step="0.1" defaultValue="32"/></div>
@@ -1113,7 +1115,7 @@ function ConsultationFlow(){
       </div>
     </div>}
 
-    {step===2&&<DiagnosticInline onNext={()=>setStep(3)} onBack={()=>setStep(1)}/>}
+    {step===2&&<DiagnosticInline animalId={anId} symptoms={symptoms} notes={notes} onResults={setDiagResult} onNext={()=>setStep(3)} onBack={()=>setStep(1)}/>}
 
     {step===3&&<div className="c af1" style={{maxWidth:700}}>
       <div className="c-title" style={{marginBottom:16}}>Ordonnance</div>
@@ -1137,16 +1139,44 @@ function ConsultationFlow(){
     </div>}
 
     {step===4&&<div className="af1" style={{maxWidth:700}}>
-      <ReportInline onFinish={()=>{toast('Consultation terminée et CR enregistré','tl');nav('dashboard');}}/>
+      <ReportInline animalId={anId} symptoms={symptoms} notes={notes} diagResult={diagResult} onFinish={()=>{toast('Consultation terminée et CR enregistré','tl');nav('dashboard');}}/>
     </div>}
   </div>);
 }
-function DiagnosticInline({onNext,onBack}){
+function DiagnosticInline({animalId,symptoms,notes,onResults,onNext,onBack}){
+  const{toast}=useContext(Ctx);
   const[loading,setLoading]=useState(true);
+  const[error,setError]=useState('');
+  const[dr,setDr]=useState(null);
   const[expanded,setExpanded]=useState(0);
-  useEffect(()=>{const t=setTimeout(()=>setLoading(false),2200);return()=>clearTimeout(t);},[]);
-  if(loading) return <div className="c af1" style={{textAlign:'center',padding:50}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--t)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Analyse IA en cours...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:4}}>Corrélation des symptômes avec le dossier de Rex</p><div style={{display:'flex',gap:8,justifyContent:'center',marginTop:16}}>{['Analyse symptômes','Comparaison historique','Calcul probabilités','Vérification allergies'].map((s,i)=><span key={i} className="tag tag-t" style={{animation:`fadeIn .3s ease ${i*.3}s both`}}>{s}</span>)}</div></div>;
-  const dr=DIAG_RESULTS;
+  const an=ANIMALS.find(a=>a.id===animalId)||ANIMALS[0];
+  useEffect(()=>{
+    let cancelled=false;
+    setLoading(true);setError('');setDr(null);
+    (async()=>{
+      try{
+        const res=await fetch('/api/diagnostic',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({animalId,symptoms:symptoms||'Symptômes non renseignés',notes:notes||''})
+        });
+        const data=await res.json();
+        if(cancelled) return;
+        if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+        setDr(data.result);
+        if(onResults) onResults(data.result);
+      }catch(err){
+        if(cancelled) return;
+        setError(err.message||String(err));
+        toast(`Échec de l'analyse IA : ${err.message||err}`,'r');
+      }finally{
+        if(!cancelled) setLoading(false);
+      }
+    })();
+    return()=>{cancelled=true;};
+  },[animalId,symptoms,notes]);
+  if(loading) return <div className="c af1" style={{textAlign:'center',padding:50}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--t)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Analyse IA en cours...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:4}}>Corrélation des symptômes avec le dossier de {an.nm}</p><div style={{display:'flex',gap:8,justifyContent:'center',marginTop:16}}>{['Analyse symptômes','Comparaison historique','Calcul probabilités','Vérification allergies'].map((s,i)=><span key={i} className="tag tag-t" style={{animation:`fadeIn .3s ease ${i*.3}s both`}}>{s}</span>)}</div></div>;
+  if(error||!dr) return <div className="c af1" style={{padding:30,textAlign:'center'}}><div style={{fontSize:'1.4rem',marginBottom:8}}>⚠️</div><div style={{fontWeight:600,color:'#e74c3c',marginBottom:6}}>Impossible de lancer l'analyse IA</div><p style={{fontSize:'.84rem',color:'var(--txt2)',marginBottom:14}}>{error||'Aucun résultat reçu'}</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><button className="btn btn-o" onClick={onBack}>Retour</button></div></div>;
   return(<div>
     <div className="c af1" style={{padding:0,overflow:'hidden'}}>
       <div style={{padding:'20px 22px 0'}}>
@@ -1184,11 +1214,52 @@ function DiagnosticInline({onNext,onBack}){
     </div>
   </div>);
 }
-function ReportInline({onFinish}){
+function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
+  const{toast}=useContext(Ctx);
   const[gen,setGen]=useState(true);
+  const[error,setError]=useState('');
+  const[soap,setSoap]=useState(null);
+  const[ownerSummary,setOwnerSummary]=useState('');
   const[tab,setTab]=useState('vet');
-  useEffect(()=>{const t=setTimeout(()=>setGen(false),1800);return()=>clearTimeout(t);},[]);
+  const an=ANIMALS.find(a=>a.id===animalId)||ANIMALS[0];
+  const topHypo=diagResult&&diagResult.hypotheses&&diagResult.hypotheses[0];
+  const dateStr=new Date().toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const dateLong=new Date().toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
+  useEffect(()=>{
+    let cancelled=false;
+    setGen(true);setError('');setSoap(null);setOwnerSummary('');
+    (async()=>{
+      try{
+        const res=await fetch('/api/soap/generate',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            animalId,
+            motif:symptoms||'Consultation générale',
+            examen:notes||'',
+            hypothese:topHypo?topHypo.nm:'',
+            traitement:''
+          })
+        });
+        const data=await res.json();
+        if(cancelled) return;
+        if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+        setSoap(data.soap);
+        setOwnerSummary(data.ownerSummary||'');
+      }catch(err){
+        if(cancelled) return;
+        setError(err.message||String(err));
+        toast(`Échec de la génération IA : ${err.message||err}`,'r');
+      }finally{
+        if(!cancelled) setGen(false);
+      }
+    })();
+    return()=>{cancelled=true;};
+  },[animalId,symptoms,notes,topHypo&&topHypo.nm]);
+
   if(gen) return <div className="c" style={{textAlign:'center',padding:50}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--g)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Génération IA des comptes rendus...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:6}}>Rédaction du rapport vétérinaire et du compte rendu propriétaire...</p></div>;
+  if(error||!soap) return <div className="c" style={{padding:30,textAlign:'center'}}><div style={{fontSize:'1.4rem',marginBottom:8}}>⚠️</div><div style={{fontWeight:600,color:'#e74c3c',marginBottom:6}}>Impossible de générer le compte rendu</div><p style={{fontSize:'.84rem',color:'var(--txt2)',marginBottom:14}}>{error||'Aucun résultat reçu'}</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><button className="btn btn-o" onClick={onFinish}>Revenir au tableau de bord</button></div></div>;
+
   return(<>
     <div className="tabs" style={{maxWidth:450}}>
       <button className={`tab ${tab==='vet'?'on':''}`} onClick={()=>setTab('vet')}>🩺 Compte rendu vétérinaire</button>
@@ -1211,30 +1282,28 @@ function ReportInline({onFinish}){
             <div style={{fontSize:'.76rem',color:'var(--txt2)',marginTop:2}}>15 rue de la Santé, 75013 Paris · Tél : 01 23 45 67 89</div>
           </div>
           <div style={{textAlign:'right'}}>
-            <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Date : 12/05/2026</div>
-            <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Réf : CR-2026-0142</div>
+            <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Date : {dateStr}</div>
+            <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Réf : CR-{new Date().getFullYear()}-{String(an.id).padStart(4,'0')}</div>
           </div>
         </div>
 
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:18,padding:14,background:'var(--bg)',borderRadius:10}}>
-          <div><div style={{fontSize:'.68rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--mg)',marginBottom:4}}>Patient</div><div style={{fontSize:'.86rem',fontWeight:600,color:'var(--txt)'}}>Rex — Labrador, 5 ans, M, 32 kg</div><div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Puce : 250269810012345</div></div>
-          <div><div style={{fontSize:'.68rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--mg)',marginBottom:4}}>Propriétaire</div><div style={{fontSize:'.86rem',fontWeight:600,color:'var(--txt)'}}>M. Dupont</div><div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Tél : 06 12 34 56 78</div></div>
+          <div><div style={{fontSize:'.68rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--mg)',marginBottom:4}}>Patient</div><div style={{fontSize:'.86rem',fontWeight:600,color:'var(--txt)'}}>{an.nm} — {an.breed}, {an.age}, {an.sex}, {an.wt}</div>{an.chip&&<div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Puce : {an.chip}</div>}</div>
+          <div><div style={{fontSize:'.68rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--mg)',marginBottom:4}}>Propriétaire</div><div style={{fontSize:'.86rem',fontWeight:600,color:'var(--txt)'}}>{an.owner}</div>{an.phone&&<div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Tél : {an.phone}</div>}</div>
         </div>
 
         {[
-          {t:'Motif de consultation',ic:'📋',c:"Contrôle diabète — Suivi glycémie mensuel. Le propriétaire rapporte des vomissements répétés depuis 48h et une anorexie complète."},
-          {t:'Examen clinique',ic:'🔍',c:"T° : 38.7°C · FC : 90 bpm · FR : 22/min · TRC : 2s · Muqueuses légèrement pâles. Abdomen sensible à la palpation épigastrique. Légère déshydratation estimée à 5%. Auscultation cardio-pulmonaire NAD. Nœuds lymphatiques non réactionnels."},
-          {t:'Suspicion diagnostique',ic:'🧠',c:"Hypothèse principale : Douleur chronique liée à une affection ostéo-articulaire (55%). Hypothèse secondaire : Affection gastro-intestinale — gastrite, corps étranger ou pancréatite (50%). Hypothèse tertiaire : Affection infectieuse ou inflammatoire systémique (30%). Niveau d'urgence estimé : MODÉRÉE."},
-          {t:'Examens complémentaires réalisés',ic:'🔬',c:"Bilan sanguin complet (NFS, biochimie). Radiographies abdominales face et profil. Radiographies du membre antérieur gauche. Résultats en attente pour les sérologies infectieuses."},
-          {t:'Traitement prescrit',ic:'💊',c:"Maropitant (Cerenia) 1mg/kg SC 1x/jour pendant 3 jours. Oméprazole 1mg/kg PO 1x/jour à jeun pendant 7 jours. Perfusion NaCl 0.9% 500ml/24h en hospitalisation. ⚠ ALLERGIE PÉNICILLINE — Contre-indication absolue."},
-          {t:'Pronostic et suivi',ic:'📅',c:"Pronostic réservé dans l'attente des résultats complémentaires. Contrôle obligatoire dans 48 heures. Si dégradation de l'état général → échographie abdominale en urgence et réévaluation du diagnostic. Régime alimentaire léger pendant 5 jours minimum."}
+          {t:'Subjectif — motif & anamnèse',ic:'📋',c:soap.S},
+          {t:'Objectif — examen clinique',ic:'🔍',c:soap.O},
+          {t:'Analyse — suspicion diagnostique',ic:'🧠',c:soap.A},
+          {t:'Plan — examens, traitement, suivi',ic:'💊',c:soap.P}
         ].map((s,i)=>(
           <div key={i} style={{marginBottom:16}}>
             <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8}}>
               <span style={{fontSize:'.9rem'}}>{s.ic}</span>
               <div style={{fontSize:'.76rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--t)'}}>{s.t}</div>
             </div>
-            <p style={{fontSize:'.84rem',lineHeight:1.75,color:'var(--txt)',paddingLeft:22}}>{s.c}</p>
+            <p style={{fontSize:'.84rem',lineHeight:1.75,color:'var(--txt)',paddingLeft:22,whiteSpace:'pre-wrap'}}>{s.c}</p>
           </div>
         ))}
 
@@ -1258,41 +1327,16 @@ function ReportInline({onFinish}){
         <div style={{textAlign:'center',marginBottom:20,paddingBottom:16,borderBottom:'1px dashed var(--lg)'}}>
           <div style={{fontFamily:'var(--fh)',fontSize:'1.15rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire VetCopilot</div>
           <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:4}}>15 rue de la Santé, 75013 Paris · 01 23 45 67 89</div>
-          <div style={{fontSize:'.78rem',color:'var(--txt2)'}}>Consultation du 12 mai 2026</div>
+          <div style={{fontSize:'.78rem',color:'var(--txt2)'}}>Consultation du {dateLong}</div>
         </div>
 
         <div style={{fontSize:'.9rem',lineHeight:1.9,color:'var(--txt)'}}>
-          <p>Cher M. Dupont,</p>
-          <p style={{marginTop:12}}>Suite à la consultation de <strong>Rex</strong> aujourd'hui, voici un résumé de ce que nous avons observé et des soins apportés.</p>
+          <p>{an.owner.startsWith('Mme')?'Chère ':'Cher '}{an.owner},</p>
+          <p style={{marginTop:12}}>Suite à la consultation de <strong>{an.nm}</strong> aujourd'hui, voici un résumé de ce que nous avons observé et des soins apportés.</p>
 
           <div style={{background:'rgba(43,160,143,.05)',borderRadius:10,padding:16,margin:'16px 0',borderLeft:'3px solid var(--t)'}}>
-            <div style={{fontWeight:700,color:'var(--t)',fontSize:'.82rem',marginBottom:6}}>Ce que nous avons constaté</div>
-            <p>Rex présente des <strong>vomissements</strong> depuis 2 jours et ne mange plus. Il est légèrement <strong>déshydraté</strong> et son ventre est sensible quand on le touche. Nous suspectons principalement un problème articulaire pouvant causer de la douleur, ainsi qu'un possible trouble digestif. Des examens complémentaires sont en cours pour préciser le diagnostic.</p>
-          </div>
-
-          <div style={{background:'rgba(200,164,92,.05)',borderRadius:10,padding:16,margin:'16px 0',borderLeft:'3px solid var(--g)'}}>
-            <div style={{fontWeight:700,color:'var(--g)',fontSize:'.82rem',marginBottom:6}}>Ce que nous avons fait</div>
-            <p>Nous avons réalisé une <strong>prise de sang</strong>, des <strong>radiographies</strong> et administré un traitement contre les nausées ainsi qu'une perfusion pour le réhydrater. Rex reste en observation à la clinique pour la nuit.</p>
-          </div>
-
-          <div style={{background:'rgba(11,29,52,.03)',borderRadius:10,padding:16,margin:'16px 0',borderLeft:'3px solid var(--txt)'}}>
-            <div style={{fontWeight:700,color:'var(--txt)',fontSize:'.82rem',marginBottom:6}}>Médicaments à donner à la maison</div>
-            <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:4}}>
-              <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
-                <span style={{fontSize:'.9rem'}}>💊</span>
-                <div><strong>Oméprazole</strong> — 1 comprimé le matin à jeun pendant 7 jours<br/><span style={{fontSize:'.78rem',color:'var(--txt2)'}}>Protège l'estomac et réduit l'acidité</span></div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{background:'rgba(231,76,60,.05)',borderRadius:10,padding:16,margin:'16px 0',borderLeft:'3px solid #e74c3c'}}>
-            <div style={{fontWeight:700,color:'#e74c3c',fontSize:'.82rem',marginBottom:6}}>Points importants à surveiller</div>
-            <p>Donnez-lui uniquement des <strong>repas légers</strong> (poulet-riz) en petites portions pendant 5 jours. Eau fraîche à volonté. Si les vomissements reprennent, s'il devient très fatigué, ou s'il refuse toujours de manger après 24h, <strong>contactez-nous immédiatement</strong>.</p>
-          </div>
-
-          <div style={{background:'rgba(43,160,143,.08)',borderRadius:10,padding:16,margin:'16px 0',border:'1.5px solid rgba(43,160,143,.2)'}}>
-            <div style={{fontWeight:700,color:'var(--t)',fontSize:'.86rem',marginBottom:4}}>📅 Prochain rendez-vous : dans 48 heures</div>
-            <p style={{fontSize:'.84rem'}}>Un contrôle est indispensable pour vérifier l'évolution de Rex. Merci de prendre rendez-vous au 01 23 45 67 89.</p>
+            <div style={{fontWeight:700,color:'var(--t)',fontSize:'.82rem',marginBottom:6}}>Résumé de la consultation</div>
+            <p style={{whiteSpace:'pre-wrap'}}>{ownerSummary}</p>
           </div>
 
           <p style={{marginTop:16}}>N'hésitez pas à nous appeler si vous avez la moindre question.</p>
@@ -1500,7 +1544,25 @@ function Diagnostic(){
   const[diagTab,setDiagTab]=useState('symptoms');
   const fileRef=useRef(null);
 
-  const analyze=()=>{if(!symptoms.trim())return;setAnalyzing(true);setResults(null);setTimeout(()=>{setAnalyzing(false);setResults(DIAG_RESULTS);toast(`Analyse terminée — ${DIAG_RESULTS.hypotheses.length} hypothèses identifiées`,'tl');},2200);};
+  const analyze=async()=>{
+    if(!symptoms.trim())return;
+    setAnalyzing(true);setResults(null);
+    try{
+      const res=await fetch('/api/diagnostic',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({animalId:anId,symptoms,notes:''})
+      });
+      const data=await res.json();
+      if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+      setResults(data.result);
+      toast(`Analyse terminée — ${data.result.hypotheses.length} hypothèses identifiées`,'tl');
+    }catch(err){
+      toast(`Échec de l'analyse IA : ${err.message||err}`,'r');
+    }finally{
+      setAnalyzing(false);
+    }
+  };
   const toggleMic=()=>{if(!rec){setRec(true);setTimeout(()=>{setRec(false);setSymptoms("Vomissements, perte d'appétit depuis 2 jours, légère déshydratation, abdomen sensible à la palpation.");},2500);}else setRec(false);};
 
   // Image handlers
