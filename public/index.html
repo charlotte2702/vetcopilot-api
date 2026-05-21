@@ -280,6 +280,26 @@ box-shadow:var(--shl);z-index:250;overflow:hidden;transform:translateY(-8px);opa
 .notif-item.unread{background:rgba(43,160,143,.03)}
 .notif-dot-l{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
 
+/* ORDONNANCE */
+.ord-section-hdr{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:10px;margin:18px 0 10px;font-weight:700;font-size:.86rem;color:#fff;letter-spacing:.03em}
+.ord-section-hdr.clinic{background:linear-gradient(135deg,#2BA08F,#1f8a76)}
+.ord-section-hdr.pharma{background:linear-gradient(135deg,#0B1D34,#122A44)}
+.ord-med{background:var(--card);border:1px solid var(--card-b);border-radius:10px;padding:14px;margin-bottom:10px}
+.ord-med-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.ord-med-row-full{margin-bottom:8px}
+.ord-med input,.ord-med textarea{width:100%;border:1px solid var(--lg);border-radius:6px;padding:7px 10px;font-family:inherit;font-size:.82rem;color:var(--txt);background:var(--bg);outline:none;transition:border-color .15s}
+.ord-med input:focus,.ord-med textarea:focus{border-color:var(--t);background:var(--card)}
+.ord-med input.nm{font-weight:700;color:var(--txt)}
+.ord-med-label{font-size:.66rem;font-weight:700;text-transform:uppercase;color:var(--mg);margin-bottom:3px;letter-spacing:.04em}
+.ord-med-actions{display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:8px;border-top:1px dashed var(--lg)}
+.ord-add{background:transparent;border:1px dashed var(--t);color:var(--t);padding:8px 14px;border-radius:8px;font-weight:600;font-size:.78rem;cursor:pointer;width:100%;transition:all .15s}
+.ord-add:hover{background:rgba(43,160,143,.06);border-style:solid}
+.ord-alert{background:rgba(231,76,60,.06);border:1px solid rgba(231,76,60,.25);border-radius:10px;padding:12px 14px;margin-bottom:16px}
+.ord-alert-title{font-size:.72rem;font-weight:700;color:#e74c3c;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;display:flex;align-items:center;gap:5px}
+.ord-alert ul{margin:0;padding-left:18px;font-size:.82rem;color:var(--txt);line-height:1.5}
+.ord-disclaimer{background:rgba(200,164,92,.08);border:1px solid rgba(200,164,92,.2);border-radius:10px;padding:12px 14px;margin-top:16px;font-size:.78rem;color:var(--txt2);line-height:1.5}
+.ord-disclaimer strong{color:var(--g)}
+
 /* CHAT WIDGET */
 .chat-fab{position:fixed;bottom:24px;right:24px;width:58px;height:58px;border-radius:50%;background:var(--t);color:#fff;border:none;font-size:26px;cursor:pointer;box-shadow:0 8px 24px rgba(11,29,52,.25),0 2px 6px rgba(11,29,52,.15);z-index:380;display:flex;align-items:center;justify-content:center;transition:transform .18s,box-shadow .18s}
 .chat-fab:hover{transform:translateY(-2px) scale(1.04);box-shadow:0 12px 30px rgba(11,29,52,.3)}
@@ -1054,12 +1074,17 @@ function NotifPanel(){
 
 // ===== CHAT WIDGET (Claude-powered) =====
 function ChatWidget(){
-  const{chatOpen,setChatOpen,chatMessages,setChatMessages,chatSending,setChatSending,selAnimal,toast}=useContext(Ctx);
+  const{chatOpen,setChatOpen,chatMessages,setChatMessages,chatSending,setChatSending,selAnimal,toast,nav}=useContext(Ctx);
   const[input,setInput]=useState('');
   const dict=useDictation();
   const msgsRef=useRef(null);
   const inputRef=useRef(null);
-  const quickSuggestions=['Posologie médicament','Prochain RDV','Question sur un patient'];
+  const quickSuggestions=[
+    {label:'Posologie médicament',send:'Quelle est la posologie de référence pour ce patient ?'},
+    {label:'Prochain RDV',send:'Quel est mon prochain rendez-vous ?'},
+    {label:'Question sur un patient',send:'J\'ai une question sur un patient.'},
+    {label:'Générer ordonnance',action:()=>{setChatOpen(false);nav('diagnostic');toast("Ouvre l'assistant diagnostic — l'ordonnance se génère après l'analyse",'tl');}}
+  ];
   const hasUserMsg=chatMessages.some(m=>m.role==='user');
 
   // Auto-scroll to bottom on new messages or typing indicator
@@ -1128,7 +1153,7 @@ function ChatWidget(){
       </div>
       {!hasUserMsg&&<div className="chat-suggestions">
         {quickSuggestions.map(s=>(
-          <button key={s} className="chat-suggestion" onClick={()=>send(s)}>{s}</button>
+          <button key={s.label} className="chat-suggestion" onClick={()=>s.action?s.action():send(s.send||s.label)}>{s.label}</button>
         ))}
       </div>}
       <div className="chat-input-row">
@@ -1860,6 +1885,134 @@ const IMG_ANALYSIS_DB={
   'Autre':{quality:'medium',qualityLabel:'Moyenne',observations:["Image nécessitant une catégorisation plus précise pour une analyse optimale","Structures anatomiques identifiables mais contexte clinique requis","Qualité suffisante pour une première évaluation"],hypotheses:[{nm:"Analyse non concluante sans contexte clinique",prob:0,lv:'lo'}],exams:["Recatégoriser l'image pour une analyse plus précise","Fournir le contexte clinique complémentaire","Ajouter des clichés supplémentaires"],urgency:'faible',urgencyLabel:'FAIBLE'},
 };
 
+// ===== ORDONNANCE CARD =====
+// Sits below the diagnostic results, generates an editable prescription via
+// /api/ordonnance/generate and exports it as a PDF.
+function OrdonnanceCard({animal,results,symptoms}){
+  const{toast}=useContext(Ctx);
+  const[loading,setLoading]=useState(false);
+  const[ord,setOrd]=useState(null); // { clinique:[], pharmacie:[], alerteAllergies:[] }
+  const[exporting,setExporting]=useState(false);
+
+  const topHypo=results&&results.hypotheses&&results.hypotheses[0]&&results.hypotheses[0].nm;
+
+  const generate=async()=>{
+    if(!animal){toast('Patient introuvable','r');return;}
+    setLoading(true);
+    try{
+      const res=await fetch('/api/ordonnance/generate',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({animalId:animal.id,diagnostic:topHypo||'',symptoms:symptoms||''})
+      });
+      const data=await res.json();
+      if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+      setOrd({clinique:data.result.clinique||[],pharmacie:data.result.pharmacie||[],alerteAllergies:data.result.alerteAllergies||[]});
+    }catch(err){
+      toast(`Génération ordonnance échouée : ${err.message||err}`,'r');
+    }finally{
+      setLoading(false);
+    }
+  };
+
+  const update=(section,idx,field,value)=>{
+    setOrd(prev=>({...prev,[section]:prev[section].map((m,i)=>i===idx?{...m,[field]:value}:m)}));
+  };
+  const remove=(section,idx)=>{
+    setOrd(prev=>({...prev,[section]:prev[section].filter((_,i)=>i!==idx)}));
+  };
+  const add=(section)=>{
+    setOrd(prev=>({...prev,[section]:[...prev[section],{nm:'',dci:'',forme:'',dose_par_kg:'',dose_calculee:'',voie:'',frequence:'',duree:'',remarques:''}]}));
+  };
+
+  const exportPdf=async()=>{
+    if(!ord||(ord.clinique.length===0&&ord.pharmacie.length===0)){toast('Aucun médicament à exporter','r');return;}
+    setExporting(true);
+    try{
+      await downloadPdf({
+        url:'/api/ordonnance/export-pdf',
+        body:{
+          patient:{nm:animal.nm,sp:animal.sp,breed:animal.breed,age:animal.age,sex:animal.sex,wt:animal.wt,owner:animal.owner,phone:animal.phone,chip:animal.chip},
+          diagnostic:topHypo||'',
+          clinique:ord.clinique,pharmacie:ord.pharmacie,alerteAllergies:ord.alerteAllergies,
+          vet:'Dr. Jean Martin'
+        },
+        filename:`Ordonnance_${safeFilename(animal.nm)}_${todayISO()}.pdf`
+      });
+      toast('Ordonnance exportée en PDF','tl');
+    }catch(err){toast(`Export PDF échoué : ${err.message||err}`,'r');}
+    finally{setExporting(false);}
+  };
+
+  if(!ord) return (
+    <div className="c af" style={{marginTop:14,textAlign:'center',padding:'24px 22px'}}>
+      <div style={{fontSize:'.86rem',color:'var(--txt2)',marginBottom:14}}>Une fois le diagnostic validé, génère une ordonnance adaptée au patient.</div>
+      <button className="btn btn-g" onClick={generate} disabled={loading}>
+        {loading?<><div style={{width:14,height:14,border:'2px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/> Génération IA en cours...</>:<><I.Rx/> Générer l'ordonnance</>}
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="c af" style={{marginTop:14,padding:'20px 22px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+        <div>
+          <div className="c-title" style={{display:'flex',alignItems:'center',gap:8}}><I.Rx/> Ordonnance</div>
+          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:2}}>Suggérée par l'IA — éditable avant export</div>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-o btn-sm" onClick={generate} disabled={loading} title="Régénérer">↻</button>
+          <button className="btn btn-g btn-sm" onClick={exportPdf} disabled={exporting||(ord.clinique.length===0&&ord.pharmacie.length===0)}>
+            {exporting?'Export...':<><I.Down/> Exporter PDF</>}
+          </button>
+        </div>
+      </div>
+
+      {ord.alerteAllergies.length>0&&<div className="ord-alert">
+        <div className="ord-alert-title">⚠ Alertes allergies / contre-indications</div>
+        <ul>{ord.alerteAllergies.map((a,i)=><li key={i}>{a}</li>)}</ul>
+      </div>}
+
+      {['clinique','pharmacie'].map(section=>(
+        <div key={section}>
+          <div className={`ord-section-hdr ${section==='clinique'?'clinic':'pharma'}`}>
+            {section==='clinique'?'🏥 Délivré par la clinique':'💊 À acheter en pharmacie'}
+            <span style={{marginLeft:'auto',opacity:.8,fontSize:'.72rem'}}>{ord[section].length} médicament{ord[section].length>1?'s':''}</span>
+          </div>
+          {ord[section].map((m,i)=>(
+            <div key={i} className="ord-med">
+              <div className="ord-med-row">
+                <div><div className="ord-med-label">Nom commercial</div><input className="nm" value={m.nm||''} onChange={e=>update(section,i,'nm',e.target.value)} placeholder="Ex: Cerenia"/></div>
+                <div><div className="ord-med-label">DCI</div><input value={m.dci||''} onChange={e=>update(section,i,'dci',e.target.value)} placeholder="Ex: Maropitant"/></div>
+              </div>
+              <div className="ord-med-row-full"><div className="ord-med-label">Forme galénique</div><input value={m.forme||''} onChange={e=>update(section,i,'forme',e.target.value)} placeholder="Ex: solution injectable 10 mg/mL"/></div>
+              <div className="ord-med-row">
+                <div><div className="ord-med-label">Posologie /kg</div><input value={m.dose_par_kg||''} onChange={e=>update(section,i,'dose_par_kg',e.target.value)} placeholder="Ex: 1 mg/kg"/></div>
+                <div><div className="ord-med-label">Dose calculée</div><input value={m.dose_calculee||''} onChange={e=>update(section,i,'dose_calculee',e.target.value)} placeholder="Ex: 32 mg (3,2 mL)"/></div>
+              </div>
+              <div className="ord-med-row" style={{gridTemplateColumns:'1fr 1fr 1fr'}}>
+                <div><div className="ord-med-label">Voie</div><input value={m.voie||''} onChange={e=>update(section,i,'voie',e.target.value)} placeholder="SC/PO/IM..."/></div>
+                <div><div className="ord-med-label">Fréquence</div><input value={m.frequence||''} onChange={e=>update(section,i,'frequence',e.target.value)} placeholder="1x/jour"/></div>
+                <div><div className="ord-med-label">Durée</div><input value={m.duree||''} onChange={e=>update(section,i,'duree',e.target.value)} placeholder="3 jours"/></div>
+              </div>
+              <div className="ord-med-row-full"><div className="ord-med-label">Remarques</div><input value={m.remarques||''} onChange={e=>update(section,i,'remarques',e.target.value)} placeholder="Conseils d'administration ou de surveillance"/></div>
+              <div className="ord-med-actions">
+                <span style={{fontSize:'.72rem',color:'var(--txt2)'}}>{m.contre_indications?`CI : ${m.contre_indications}`:''}</span>
+                <button className="btn btn-sm btn-ghost" style={{color:'#e74c3c'}} onClick={()=>remove(section,i)}>× Supprimer</button>
+              </div>
+            </div>
+          ))}
+          <button className="ord-add" onClick={()=>add(section)}>+ Ajouter un médicament</button>
+        </div>
+      ))}
+
+      <div className="ord-disclaimer">
+        <strong>⚠ Avertissement :</strong> Le vétérinaire reste seul responsable de la prescription. Cette suggestion est un outil d'aide à la décision ; vérifie chaque posologie et contre-indication avant validation.
+      </div>
+    </div>
+  );
+}
+
 // ===== DIAGNOSTIC =====
 function Diagnostic(){
   const{toast}=useContext(Ctx);
@@ -2013,6 +2166,7 @@ function Diagnostic(){
               ))}
             </div>
           </div>
+          <OrdonnanceCard animal={an} results={results} symptoms={symptoms}/>
         </div>}
         </>}
 
