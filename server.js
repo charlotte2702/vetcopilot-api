@@ -1,6 +1,7 @@
 // Local dev server.
 // - Serves API routes (from lib/app.js)
 // - Serves the untouched prototype directly from ./public (source of truth).
+require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const app = require('./lib/app');
