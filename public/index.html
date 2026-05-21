@@ -1628,15 +1628,32 @@ function Diagnostic(){
   };
   const removeImage=(id)=>{setImages(prev=>{const img=prev.find(i=>i.id===id);if(img)URL.revokeObjectURL(img.url);return prev.filter(i=>i.id!==id);});};
   const handleDrop=(e)=>{e.preventDefault();setDragOver(false);addImages(e.dataTransfer.files);};
-  const analyzeImages=()=>{
+  const analyzeImages=async()=>{
     if(images.length===0){toast('Ajoutez au moins une image à analyser','r');return;}
+    const first=images[0];
+    if(first.file.size>5*1024*1024){toast(`Image trop volumineuse (${Math.round(first.file.size/1024/1024*10)/10} MB) — limite 5 MB`,'r');return;}
     setImgAnalyzing(true);setImgResults(null);
-    setTimeout(()=>{
-      const cat=images[0].cat||imgCat;
-      const res=IMG_ANALYSIS_DB[cat]||IMG_ANALYSIS_DB['Autre'];
-      setImgAnalyzing(false);setImgResults({...res,category:cat,imageCount:images.length});
-      toast(`Analyse d'image terminée — ${res.observations.length} observations`,'tl');
-    },2800);
+    try{
+      // FileReader → data URL → strip prefix → base64 payload for the API.
+      const dataUrl=await new Promise((resolve,reject)=>{
+        const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error('lecture du fichier impossible'));r.readAsDataURL(first.file);
+      });
+      const base64=dataUrl.split(',')[1];
+      const cat=first.cat||imgCat;
+      const res=await fetch('/api/diagnostic/image',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({imageBase64:base64,mediaType:first.file.type,category:cat,animalId:anId})
+      });
+      const data=await res.json();
+      if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+      setImgResults({...data.result,category:cat,imageCount:images.length});
+      toast(`Analyse d'image terminée — ${(data.result.observations||[]).length} observations`,'tl');
+    }catch(err){
+      toast(`Échec de l'analyse d'image : ${err.message||err}`,'r');
+    }finally{
+      setImgAnalyzing(false);
+    }
   };
   const addObsToDiag=()=>{
     if(!imgResults)return;
