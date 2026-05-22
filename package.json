@@ -13,12 +13,12 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",
     "@google/generative-ai": "^0.24.1",
+    "@sparticuz/chromium-min": "^148.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "openai": "^6.39.0",
-    "pdfkit": "^0.18.0",
-    "puppeteer": "^25.0.4"
+    "puppeteer-core": "^25.0.4"
   },
   "engines": {
     "node": ">=18"
