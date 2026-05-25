@@ -1377,10 +1377,61 @@ function Modal(){
               <button className="btn btn-t" onClick={()=>{setModal(null);toast('Facture créée','tl');}}><I.Euro/> Créer la facture</button>
             </div>
           </>}
+          {modal.type==='photoLink'&&<PhotoLinkModal url={modal.url} animalNm={modal.animalNm}/>}
         </div>
       </div>
     </div>
   );
+}
+
+function PhotoLinkModal({url,animalNm}){
+  const{toast,setModal}=useContext(Ctx);
+  const[copied,setCopied]=useState(false);
+  const msg=`Bonjour, la clinique VetCopilot vous demande une photo de ${animalNm}. Merci de cliquer sur ce lien pour l'envoyer : ${url}`;
+  const copy=async()=>{
+    try{
+      if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(url);}
+      else{
+        // Legacy fallback for non-HTTPS / older browsers
+        const ta=document.createElement('textarea');ta.value=url;ta.style.position='fixed';ta.style.opacity='0';
+        document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+      }
+      setCopied(true);toast('Lien copié dans le presse-papier','tl');
+      setTimeout(()=>setCopied(false),2000);
+    }catch(err){toast(`Copie impossible : ${err.message||err}`,'r');}
+  };
+  const smsHref=`sms:?body=${encodeURIComponent(msg)}`;
+  const waHref=`https://wa.me/?text=${encodeURIComponent(msg)}`;
+  return(<div>
+    <div style={{background:'rgba(43,160,143,.06)',border:'1px solid rgba(43,160,143,.2)',borderRadius:12,padding:14,marginBottom:14}}>
+      <div style={{display:'flex',gap:10,alignItems:'flex-start'}}>
+        <span style={{fontSize:'1.4rem',lineHeight:1}}>📱</span>
+        <div style={{fontSize:'.86rem',color:'var(--txt)',lineHeight:1.5}}>
+          Envoyez ce lien au propriétaire de <strong>{animalNm}</strong>. Le lien est valable 48h et ne peut être utilisé qu'une seule fois.
+        </div>
+      </div>
+    </div>
+    <div className="fg">
+      <label className="fl">Lien à partager</label>
+      <div style={{display:'flex',gap:6}}>
+        <input className="fi" readOnly value={url} style={{flex:1,fontFamily:'monospace',fontSize:'.82rem',background:'var(--bg)'}} onFocus={e=>e.target.select()}/>
+        <button className="btn btn-t btn-sm" onClick={copy} style={{whiteSpace:'nowrap',minWidth:90}}>{copied?'✓ Copié':'Copier'}</button>
+      </div>
+    </div>
+    <div style={{fontSize:'.74rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',margin:'18px 0 8px'}}>Envoyer via</div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+      <a href={smsHref} className="btn btn-o" style={{textDecoration:'none',justifyContent:'center'}}>💬 SMS</a>
+      <a href={waHref} target="_blank" rel="noopener noreferrer" className="btn btn-o" style={{textDecoration:'none',justifyContent:'center'}}>🟢 WhatsApp</a>
+    </div>
+    <div style={{marginTop:18,padding:'12px 14px',background:'var(--bg)',borderRadius:10,display:'flex',gap:10,alignItems:'center'}}>
+      <div className="loader-dot" style={{width:10,height:10,borderRadius:'50%',background:'var(--t)',animation:'pulse 1.4s ease-in-out infinite'}}/>
+      <span style={{fontSize:'.84rem',color:'var(--txt2)'}}>En attente de la photo... La fenêtre se fermera automatiquement.</span>
+    </div>
+    <style>{`@keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}`}</style>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}}>
+      <button className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Fermer</button>
+    </div>
+  </div>);
 }
 
 // ===== DASHBOARD =====
@@ -1918,7 +1969,7 @@ function Animals(){
 
 // ===== ANIMAL DETAIL =====
 function AnimalDetail(){
-  const{selAnimal,nav,toast,setModal,animalPhotos,setAnimalPhoto,removeAnimalPhoto}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
   const[tab,setTab]=useState('overview');
   const chartRef=useRef(null);const chartInst=useRef(null);
   const photoInputRef=useRef(null);
@@ -1936,6 +1987,59 @@ function AnimalDetail(){
     }catch(err){toast(`Erreur : ${err.message||err}`,'r');}
   };
   const onPhotoRemove=()=>{removeAnimalPhoto(a.id);toast(`Photo de ${a.nm} supprimée`,'tl');};
+  // Generate a remote photo-upload link the vet can share with the owner.
+  const[reqLinkBusy,setReqLinkBusy]=useState(false);
+  const requestPhotoLink=async()=>{
+    if(reqLinkBusy) return;
+    setReqLinkBusy(true);
+    try{
+      const r=await fetch(`/api/animals/${a.id}/photo-link`,{method:'POST'});
+      const d=await r.json();
+      if(!r.ok||!d.ok) throw new Error(d&&d.error||'échec génération lien');
+      const url=`${window.location.origin}${d.path}`;
+      setModal({type:'photoLink',title:'Demande de photo',animalNm:a.nm,animalId:a.id,url});
+    }catch(err){toast(`Erreur : ${err.message||err}`,'r');}
+    finally{setReqLinkBusy(false);}
+  };
+  // One-shot sync on mount/animal change: pick up a photo the owner may have
+  // uploaded between sessions. Only writes if local has no photo, so a vet
+  // upload always wins over a stale backend snapshot.
+  useEffect(()=>{
+    let cancelled=false;
+    fetch(`/api/animals/${a.id}/photo`).then(r=>r.json()).then(d=>{
+      if(cancelled) return;
+      if(d&&d.ok&&d.photo&&d.photo.dataUrl&&!animalPhotos[a.id]){
+        setAnimalPhoto(a.id,d.photo.dataUrl);
+      }
+    }).catch(()=>{});
+    return()=>{cancelled=true;};
+  // eslint-disable-next-line
+  },[a.id]);
+  // Poll for the uploaded photo while the photo-link modal is open for THIS
+  // animal. Stops on modal close, unmount, or animal change. Closes the modal
+  // and notifies as soon as the owner submits.
+  useEffect(()=>{
+    if(!modal||modal.type!=='photoLink'||modal.animalId!==a.id) return;
+    let cancelled=false;
+    const tick=async()=>{
+      try{
+        const r=await fetch(`/api/animals/${a.id}/photo`);
+        const d=await r.json();
+        if(cancelled) return;
+        if(d&&d.ok&&d.photo&&d.photo.dataUrl){
+          const current=animalPhotos[a.id];
+          if(d.photo.dataUrl!==current){
+            setAnimalPhoto(a.id,d.photo.dataUrl);
+            toast(`Photo de ${a.nm} reçue !`,'tl');
+            setModal(null);
+          }
+        }
+      }catch(_){/* ignore transient errors */}
+    };
+    const iv=setInterval(tick,4000);
+    return()=>{cancelled=true;clearInterval(iv);};
+  // eslint-disable-next-line
+  },[modal,a.id]);
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   useEffect(()=>{
     if(tab==='overview'&&chartRef.current){
@@ -1978,9 +2082,10 @@ function AnimalDetail(){
             <span style={{display:'flex',alignItems:'center',gap:4,fontSize:'.82rem',color:'var(--txt2)'}}>⚖️ {a.wt}</span>
             <span style={{display:'flex',alignItems:'center',gap:4,fontSize:'.82rem',color:'var(--txt2)'}}><I.User/>{a.owner}</span>
           </div>
-          <div style={{display:'flex',gap:6,marginTop:10}}>
+          <div style={{display:'flex',gap:6,marginTop:10,flexWrap:'wrap'}}>
             <button className="btn btn-sm btn-ghost" onClick={()=>toast(`Appel ${a.phone}...`,'info')}><I.Phone/> {a.phone}</button>
             <button className="btn btn-sm btn-ghost" onClick={()=>toast(`Email envoyé à ${a.email||'email'}...`,'tl')}><I.Mail/> Email</button>
+            <button className="btn btn-sm btn-ghost" onClick={requestPhotoLink} disabled={reqLinkBusy} title="Envoyer un lien au propriétaire pour qu'il prenne une photo">📱 {reqLinkBusy?'Génération...':'Demander photo'}</button>
           </div>
         </div>
         <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>
