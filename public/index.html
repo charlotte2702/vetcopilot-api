@@ -796,7 +796,10 @@ function App(){
   const[notifOpen,setNotifOpen]=useState(false);
   const[toasts,setToasts]=useState([]);
   const[modal,setModal]=useState(null);
-  const[dark,setDark]=useState(IS_EMBED?true:false);
+  const[dark,setDark]=useState(()=>{
+    if(IS_EMBED) return true;
+    try{return localStorage.getItem('vet.dark')==='1';}catch(_){return false;}
+  });
   const[searchOpen,setSearchOpen]=useState(false);
   // Notifications live in state so they can be added at runtime (RDV reminders)
   // and marked-as-read without mutating the NOTIFS constant.
@@ -861,7 +864,27 @@ function App(){
     setNotifs(prev=>prev.map(n=>n.unread?{...n,unread:false}:n));
   },[]);
 
-  useEffect(()=>{document.documentElement.setAttribute('data-theme',dark?'dark':'light');},[dark]);
+  useEffect(()=>{
+    document.documentElement.setAttribute('data-theme',dark?'dark':'light');
+    if(!IS_EMBED){try{localStorage.setItem('vet.dark',dark?'1':'0');}catch(_){}}
+  },[dark]);
+
+  // User preferences persisted in localStorage. Each toggle either gates a
+  // real behavior (pushNotifs → notification poll) or is reserved for future
+  // wiring (autoDiagnostic, vaccReminders, ownerSummary).
+  const PREFS_KEY='vet.prefs.v1';
+  const DEFAULT_PREFS={pushNotifs:true,autoDiagnostic:true,vaccReminders:true,ownerSummary:true};
+  const[prefs,setPrefs]=useState(()=>{
+    try{const raw=localStorage.getItem(PREFS_KEY);if(raw)return{...DEFAULT_PREFS,...JSON.parse(raw)};}catch(_){}
+    return{...DEFAULT_PREFS};
+  });
+  const setPref=useCallback((key,value)=>{
+    setPrefs(prev=>{
+      const next={...prev,[key]:value};
+      try{localStorage.setItem(PREFS_KEY,JSON.stringify(next));}catch(_){}
+      return next;
+    });
+  },[]);
   useEffect(()=>{
     const h=(e)=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();setSearchOpen(true);}if(e.key==='Escape'){setSearchOpen(false);setNotifOpen(false);}};
     window.addEventListener('keydown',h);return()=>window.removeEventListener('keydown',h);
@@ -869,19 +892,23 @@ function App(){
   useEffect(()=>{if(IS_EMBED)document.body.classList.add('embed-mode');},[]);
 
   // Ask for Web Notification permission once on mount (only once per browser/session;
-  // the browser will silently no-op the prompt after the user's choice).
+  // the browser will silently no-op the prompt after the user's choice). Skip
+  // entirely if the user has disabled push notifications in Préférences.
   useEffect(()=>{
+    if(!prefs.pushNotifs) return;
     if(typeof Notification!=='undefined' && Notification.permission==='default'){
       // Defer so we don't prompt mid-render — better UX.
       const t=setTimeout(()=>{try{Notification.requestPermission();}catch(_){}}, 1200);
       return()=>clearTimeout(t);
     }
-  },[]);
+  },[prefs.pushNotifs]);
 
   // Poll every 60s: for each appointment within 4.5–5.5 min of "now", fire one
   // browser notification + beep + in-app notif. The 1-min window covers polling
-  // jitter so we don't miss the 5-min mark.
+  // jitter so we don't miss the 5-min mark. Toggled off → effect tears down
+  // its interval and stops firing entirely.
   useEffect(()=>{
+    if(!prefs.pushNotifs) return;
     const check=()=>{
       const now=new Date();
       for(const apt of APTS){
@@ -907,7 +934,7 @@ function App(){
     check(); // initial check on mount so a freshly-opened app catches a near RDV
     const iv=setInterval(check,60_000);
     return()=>clearInterval(iv);
-  },[addNotif]);
+  },[addNotif,prefs.pushNotifs]);
 
   const nav=useCallback((p,d)=>{setPage(p);if(d)setSelAnimal(d);setSbOpen(false);setNotifOpen(false);setSearchOpen(false);window.scrollTo({top:0,behavior:'smooth'});},[]);
   const toast=useCallback((msg,type='tl')=>{const id=Date.now();setToasts(p=>[...p,{id,msg,type}]);setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),4200);},[]);
@@ -915,7 +942,7 @@ function App(){
   if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref}}>
       <div className={`app${IS_EMBED?' embed':''}`}>
         {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
         <main className="main">
@@ -3152,38 +3179,115 @@ function Stats(){
 }
 
 // ===== SETTINGS =====
+const APP_VERSION='3.0.0';
+const ACCOUNT_INFO={
+  firstName:'Jean',
+  lastName:'Martin',
+  email:'dr.martin@vetcopilot.fr',
+  role:'Vétérinaire',
+  ordreNum:'75-12345',
+};
+
+// Compact pill switch + label + sub-line. Used by the Settings preferences
+// list. Behaves as a single click target — anywhere on the row toggles it.
+function PrefToggle({label,sub,on,onChange,disabled,last}){
+  return(<div onClick={()=>!disabled&&onChange(!on)}
+    role="switch" aria-checked={!!on} tabIndex={disabled?-1:0}
+    onKeyDown={e=>{if(!disabled&&(e.key==='Enter'||e.key===' ')){e.preventDefault();onChange(!on);}}}
+    style={{display:'flex',alignItems:'center',gap:14,padding:'14px 0',cursor:disabled?'not-allowed':'pointer',borderBottom:last?'none':'1px solid var(--bg)',opacity:disabled?.5:1}}>
+    <div style={{width:42,height:24,background:on?'var(--t)':'var(--lg)',borderRadius:12,position:'relative',transition:'background .2s',flexShrink:0}}>
+      <div style={{width:18,height:18,background:'#fff',borderRadius:'50%',position:'absolute',top:3,left:on?21:3,transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.15)'}}/>
+    </div>
+    <div style={{flex:1,minWidth:0}}>
+      <div style={{fontSize:'.9rem',color:'var(--txt)',fontWeight:500}}>{label}</div>
+      {sub&&<div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:3,lineHeight:1.4}}>{sub}</div>}
+    </div>
+  </div>);
+}
+
 function Settings(){
-  const{toast,dark,setDark}=useContext(Ctx);
+  const{toast,dark,setDark,prefs,setPref}=useContext(Ctx);
+  const initials=(ACCOUNT_INFO.firstName[0]+ACCOUNT_INFO.lastName[0]).toUpperCase();
+  const fullName=`Dr. ${ACCOUNT_INFO.firstName} ${ACCOUNT_INFO.lastName}`;
+
   return(<div style={{maxWidth:680}}>
-    <div className="c af" style={{marginBottom:18}}><div className="c-title" style={{marginBottom:18}}>Profil vétérinaire</div>
-      <div style={{display:'flex',gap:18,alignItems:'center',marginBottom:18}}>
-        <div style={{width:72,height:72,borderRadius:'50%',background:'linear-gradient(135deg,var(--t),var(--g))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.3rem',color:'#fff',fontWeight:700}}>JM</div>
-        <div><button className="btn btn-sm btn-o"><I.Upload/> Changer la photo</button><div style={{fontSize:'.72rem',color:'var(--txt2)',marginTop:4}}>JPG, PNG — Max 2 Mo</div></div>
-      </div>
-      <div className="g2"><div className="fg"><label className="fl">Prénom</label><input className="fi" defaultValue="Jean"/></div><div className="fg"><label className="fl">Nom</label><input className="fi" defaultValue="Martin"/></div></div>
-      <div className="g2"><div className="fg"><label className="fl">Email</label><input className="fi" defaultValue="dr.martin@vetcopilot.fr"/></div><div className="fg"><label className="fl">Téléphone</label><input className="fi" defaultValue="06 12 34 56 78"/></div></div>
-      <div className="fg"><label className="fl">Spécialisation</label><input className="fi" defaultValue="Médecine générale — Chirurgie"/></div>
-      <div className="fg"><label className="fl">N° Ordre vétérinaire</label><input className="fi" defaultValue="75-12345"/></div>
-      <button className="btn btn-t" style={{marginTop:6}} onClick={()=>toast('Profil sauvegardé','tl')}>Sauvegarder</button>
-    </div>
-    <div className="c af1" style={{marginBottom:18}}><div className="c-title" style={{marginBottom:18}}>Clinique</div>
-      <div className="fg"><label className="fl">Nom</label><input className="fi" defaultValue="Clinique Vétérinaire VetCopilot"/></div>
-      <div className="g2"><div className="fg"><label className="fl">Adresse</label><input className="fi" defaultValue="15 rue de la Santé, 75013 Paris"/></div><div className="fg"><label className="fl">Téléphone</label><input className="fi" defaultValue="01 23 45 67 89"/></div></div>
-      <div className="g2"><div className="fg"><label className="fl">SIRET</label><input className="fi" defaultValue="123 456 789 00012"/></div><div className="fg"><label className="fl">TVA</label><select className="fi fi-sel"><option>20%</option><option>10%</option><option>5.5%</option><option>0% (exonéré)</option></select></div></div>
-      <button className="btn btn-t" style={{marginTop:6}} onClick={()=>toast('Clinique sauvegardée','tl')}>Sauvegarder</button>
-    </div>
-    <div className="c af2"><div className="c-title" style={{marginBottom:18}}>Préférences</div>
-      <div className="fg"><label className="fl">Modèle d'IA</label><select className="fi fi-sel"><option>Claude 4 Opus (recommandé)</option><option>Claude 4 Sonnet</option><option>GPT-4 Turbo</option><option>Modèle local (Llama 3)</option></select></div>
-      <div className="fg"><label className="fl">Langue des rapports</label><select className="fi fi-sel"><option>Français</option><option>Anglais</option><option>Espagnol</option></select></div>
-      {[{l:'Mode sombre',on:dark,fn:()=>setDark(!dark)},{l:'Suggestions de diagnostic automatiques',on:true},{l:'Notifications push avant chaque RDV',on:true},{l:'Rappels vaccinations automatiques',on:true},{l:'Génération auto des CR propriétaire',on:true}].map((s,i)=>(
-        <div key={i} style={{display:'flex',alignItems:'center',gap:11,padding:'10px 0',cursor:'pointer'}} onClick={s.fn}>
-          <div style={{width:42,height:24,background:s.on?'var(--t)':'var(--lg)',borderRadius:12,position:'relative',transition:'background .2s'}}>
-            <div style={{width:18,height:18,background:'#fff',borderRadius:'50%',position:'absolute',top:3,right:s.on?3:'auto',left:s.on?'auto':3,transition:'all .2s',boxShadow:'0 1px 3px rgba(0,0,0,.15)'}}/>
-          </div>
-          <span style={{fontSize:'.86rem',color:'var(--txt)'}}>{s.l}</span>
+    {/* ACCOUNT INFO (read-only) */}
+    <div className="c af" style={{marginBottom:18}}>
+      <div className="c-title" style={{marginBottom:18}}>Informations du compte</div>
+      <div style={{display:'flex',gap:18,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}>
+        <div style={{width:64,height:64,borderRadius:'50%',background:'linear-gradient(135deg,var(--t),var(--g))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.15rem',color:'#fff',fontWeight:700,flexShrink:0}}>{initials}</div>
+        <div style={{flex:1,minWidth:200}}>
+          <div style={{fontFamily:'var(--fh)',fontSize:'1.1rem',fontWeight:700,color:'var(--txt)'}}>{fullName}</div>
+          <div style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:2}}>{ACCOUNT_INFO.role} · N° Ordre {ACCOUNT_INFO.ordreNum}</div>
         </div>
-      ))}
-      <button className="btn btn-t" style={{marginTop:10}} onClick={()=>toast('Préférences sauvegardées','tl')}>Sauvegarder</button>
+        <span className="tag tag-t" style={{fontSize:'.68rem'}}>Compte actif</span>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10}}>
+        {[
+          {k:'Nom complet',v:fullName},
+          {k:'Email',v:ACCOUNT_INFO.email},
+          {k:'Rôle',v:ACCOUNT_INFO.role},
+        ].map((row,i)=>(
+          <div key={i} style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10}}>
+            <div style={{fontSize:'.68rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}}>{row.k}</div>
+            <div style={{fontSize:'.88rem',color:'var(--txt)',fontWeight:500,wordBreak:'break-word'}}>{row.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:14,fontStyle:'italic'}}>L'édition du profil sera disponible prochainement.</div>
+    </div>
+
+    {/* PREFERENCES (5 functional toggles) */}
+    <div className="c af1" style={{marginBottom:18}}>
+      <div className="c-title" style={{marginBottom:6}}>Préférences</div>
+      <div style={{fontSize:'.78rem',color:'var(--txt2)',marginBottom:8}}>Vos préférences sont enregistrées sur cet appareil.</div>
+      <PrefToggle
+        label="Mode sombre"
+        sub="Bascule l'interface en thème sombre pour réduire la fatigue oculaire."
+        on={dark}
+        onChange={setDark}/>
+      <PrefToggle
+        label="Notifications push"
+        sub="Rappel par notification système 5 minutes avant chaque rendez-vous."
+        on={prefs.pushNotifs}
+        onChange={v=>{setPref('pushNotifs',v);toast(v?'Notifications activées':'Notifications désactivées','tl');}}/>
+      <PrefToggle
+        label="Suggestions de diagnostic automatiques"
+        sub="L'IA propose des hypothèses dès la saisie des symptômes."
+        on={prefs.autoDiagnostic}
+        onChange={v=>setPref('autoDiagnostic',v)}/>
+      <PrefToggle
+        label="Rappels vaccinations automatiques"
+        sub="Génère un rappel quand une vaccination arrive à échéance."
+        on={prefs.vaccReminders}
+        onChange={v=>setPref('vaccReminders',v)}/>
+      <PrefToggle
+        label="Génération auto des CR propriétaire"
+        sub="Produit automatiquement la version vulgarisée du compte rendu."
+        on={prefs.ownerSummary}
+        onChange={v=>setPref('ownerSummary',v)}
+        last/>
+    </div>
+
+    {/* ABOUT */}
+    <div className="c af2">
+      <div className="c-title" style={{marginBottom:14}}>À propos</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10,marginBottom:14}}>
+        <div style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10}}>
+          <div style={{fontSize:'.68rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}}>Version</div>
+          <div style={{fontSize:'.88rem',color:'var(--txt)',fontWeight:500,fontFamily:'var(--fh)'}}>VetCopilot v{APP_VERSION}</div>
+        </div>
+        <div style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10}}>
+          <div style={{fontSize:'.68rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}}>Environnement</div>
+          <div style={{fontSize:'.88rem',color:'var(--txt)',fontWeight:500}}>Production</div>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        <a href="mailto:support@vetcopilot.fr" className="btn btn-o btn-sm" style={{textDecoration:'none'}}><I.Mail/> Contacter le support</a>
+        <a href="#" onClick={e=>{e.preventDefault();toast('Centre d\'aide à venir','info');}} className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>Centre d'aide</a>
+        <a href="#" onClick={e=>{e.preventDefault();toast('Conditions d\'utilisation à venir','info');}} className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>Conditions d'utilisation</a>
+      </div>
+      <div style={{fontSize:'.72rem',color:'var(--txt2)',marginTop:14,textAlign:'center'}}>© 2026 VetCopilot — L'IA est un outil d'aide, le vétérinaire garde la décision finale.</div>
     </div>
   </div>);
 }
