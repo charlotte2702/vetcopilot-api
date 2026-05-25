@@ -1080,91 +1080,76 @@ function UserAvatar({member,size=36,editable=false,online=false,onChange}){
 
 function LoginPage({onLogin}){
   const{switchUser,toast,teamMembers}=useContext(Ctx);
-  const[email,setEmail]=useState('dr.martin@vetcopilot.fr');
-  const[pw,setPw]=useState('');
-  const[loading,setLoading]=useState(false);
-  const[showPw,setShowPw]=useState(false);
-  const handleLogin=(e)=>{e.preventDefault();setLoading(true);setTimeout(()=>{setLoading(false);onLogin();},1200);};
+  const[loadingId,setLoadingId]=useState(null);
   const quickLogin=(member)=>{
+    if(loadingId) return;
+    setLoadingId(member.id);
     switchUser(member.id);
-    setEmail(member.email);
-    toast(`Connexion en cours — ${teamMemberFullName(member)}...`,'tl');
-    setLoading(true);
-    setTimeout(()=>{setLoading(false);onLogin();},800);
+    toast(`Bienvenue ${teamMemberFullName(member)}`,'tl');
+    setTimeout(()=>{setLoadingId(null);onLogin();},600);
   };
   return(
-    <div className="login-page">
-      <div className="login-left af">
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:40}}>
-          <div className="sb-logo-mark"><LogoImg white size={28}/></div>
-          <div><div style={{fontFamily:'var(--fh)',fontSize:'1.6rem'}}>VetCopilot</div>
-          <div style={{fontSize:'.7rem',color:'var(--t)',textTransform:'uppercase',letterSpacing:'.12em',fontWeight:600}}>L'Assistant Intelligent</div></div>
-        </div>
-        <h1 style={{fontFamily:'var(--fh)',fontSize:'2.4rem',lineHeight:1.2,marginBottom:16,maxWidth:450}}>L'intelligence artificielle au service de la médecine vétérinaire</h1>
-        <p style={{fontSize:'.95rem',opacity:.5,lineHeight:1.7,maxWidth:420,marginBottom:32}}>Diagnostics assistés par IA, gestion intelligente des dossiers patients, facturation et génération automatique de comptes rendus.</p>
-        <div style={{display:'flex',gap:24}}>
-          {[{v:'500+',l:'Vétérinaires'},{v:'50k+',l:'Patients'},{v:'98%',l:'Satisfaction'},{v:'24/7',l:'Support IA'}].map((s,i)=>
-            <div key={i}><div style={{fontSize:'1.4rem',fontWeight:800,color:'var(--t)'}}>{s.v}</div><div style={{fontSize:'.72rem',opacity:.4,marginTop:2}}>{s.l}</div></div>
-          )}
+    <div style={{
+      position:'fixed',inset:0,minHeight:'100vh',width:'100%',
+      background:'#0B1D34',color:'#fff',
+      display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+      padding:'40px 20px',overflow:'auto',
+      fontFamily:'var(--fb)'
+    }}>
+      {/* Subtle background glows */}
+      <div aria-hidden="true" style={{position:'fixed',top:'-15%',left:'-10%',width:'55%',height:'55%',background:'radial-gradient(circle, rgba(43,160,143,.18) 0%, transparent 65%)',pointerEvents:'none',filter:'blur(40px)'}}/>
+      <div aria-hidden="true" style={{position:'fixed',bottom:'-15%',right:'-10%',width:'55%',height:'55%',background:'radial-gradient(circle, rgba(200,164,92,.14) 0%, transparent 65%)',pointerEvents:'none',filter:'blur(40px)'}}/>
+      <div aria-hidden="true" style={{position:'fixed',top:'40%',right:'25%',width:'25%',height:'25%',background:'radial-gradient(circle, rgba(43,160,143,.08) 0%, transparent 70%)',pointerEvents:'none',filter:'blur(60px)'}}/>
+
+      {/* Logo + brand */}
+      <div style={{position:'relative',textAlign:'center',marginBottom:36,zIndex:1}}>
+        <img src="/icon-512.png" alt="VetCopilot" width={60} height={60} style={{borderRadius:14,boxShadow:'0 10px 30px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.06)',display:'block',margin:'0 auto 18px'}}/>
+        <div style={{fontFamily:'var(--fh)',fontSize:'1.8rem',fontWeight:700,letterSpacing:'-.01em',color:'#fff'}}>VetCopilot</div>
+        <div style={{fontSize:'.86rem',color:'rgba(255,255,255,.55)',marginTop:4}}>L'assistant intelligent du vétérinaire</div>
+      </div>
+
+      {/* Glassmorphism card */}
+      <div style={{
+        position:'relative',zIndex:1,width:'100%',maxWidth:380,
+        background:'rgba(255,255,255,0.04)',
+        border:'1px solid rgba(255,255,255,0.08)',
+        borderRadius:16,
+        backdropFilter:'blur(20px)',
+        WebkitBackdropFilter:'blur(20px)',
+        padding:'24px 22px',
+        boxShadow:'0 20px 60px rgba(0,0,0,.4)',
+      }}>
+        <div style={{fontSize:'.7rem',fontWeight:700,color:'rgba(255,255,255,.45)',textTransform:'uppercase',letterSpacing:'.1em',marginBottom:16}}>Qui êtes-vous ?</div>
+        <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          {teamMembers.map(m=>{
+            const loading=loadingId===m.id;
+            return(<div key={m.id} role="button" tabIndex={0}
+              onClick={()=>quickLogin(m)}
+              onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();quickLogin(m);}}}
+              onMouseEnter={e=>{if(!loadingId){e.currentTarget.style.background='rgba(255,255,255,.06)';e.currentTarget.style.borderColor='rgba(43,160,143,.5)';}}}
+              onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.borderColor='rgba(255,255,255,.06)';}}
+              style={{
+                display:'flex',alignItems:'center',gap:12,
+                padding:'12px 14px',borderRadius:12,
+                background:'transparent',border:'1px solid rgba(255,255,255,.06)',
+                cursor:loadingId?'wait':'pointer',transition:'all .15s',
+                opacity:loadingId&&!loading?.4:1,
+              }}>
+              <div onClick={e=>e.stopPropagation()}><UserAvatar member={m} size={40} editable/></div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:'.92rem',fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{teamMemberFullName(m)}</div>
+                <div style={{fontSize:'.74rem',color:'rgba(255,255,255,.5)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:1}}>{m.role}</div>
+              </div>
+              {loading
+                ? <div style={{width:14,height:14,border:'2px solid rgba(255,255,255,.2)',borderTopColor:'var(--t)',borderRadius:'50%',animation:'spin .6s linear infinite',flexShrink:0}}/>
+                : <span style={{color:'rgba(255,255,255,.3)',flexShrink:0,fontSize:'1.1rem',lineHeight:1}}>›</span>}
+            </div>);
+          })}
         </div>
       </div>
-      <div className="login-right af1">
-        <div className="login-card">
-          <h2 style={{fontFamily:'var(--fh)',fontSize:'1.5rem',marginBottom:4,color:'#0B1D34'}}>Connexion</h2>
-          <p style={{fontSize:'.84rem',color:'#8C98A6',marginBottom:18}}>Accédez à votre espace VetCopilot</p>
 
-          {/* Quick-login profiles */}
-          <div style={{fontSize:'.68rem',fontWeight:700,color:'#8C98A6',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:10}}>Connexion rapide</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,marginBottom:18}}>
-            {teamMembers.map(m=>(
-              <div key={m.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',border:'1px solid #E9ECF1',borderRadius:12,background:'#fff',cursor:'pointer',transition:'all .15s'}}
-                onClick={()=>quickLogin(m)}
-                onMouseEnter={e=>{e.currentTarget.style.borderColor='var(--t)';e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 4px 12px rgba(11,29,52,.06)';}}
-                onMouseLeave={e=>{e.currentTarget.style.borderColor='#E9ECF1';e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none';}}>
-                <div onClick={e=>e.stopPropagation()}><UserAvatar member={m} size={36} editable/></div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:'.82rem',fontWeight:600,color:'#0B1D34',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{teamMemberFullName(m)}</div>
-                  <div style={{fontSize:'.7rem',color:'#8C98A6',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m.role}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:10,margin:'4px 0 16px'}}>
-            <div style={{flex:1,height:1,background:'#E9ECF1'}}/>
-            <div style={{fontSize:'.7rem',color:'#8C98A6',textTransform:'uppercase',letterSpacing:'.08em'}}>ou</div>
-            <div style={{flex:1,height:1,background:'#E9ECF1'}}/>
-          </div>
-
-          <form onSubmit={handleLogin}>
-            <div className="fg">
-              <label className="fl" style={{color:'#0B1D34'}}>Adresse email</label>
-              <div style={{position:'relative'}}>
-                <input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="dr.martin@clinique.fr" style={{paddingLeft:38,color:'#0B1D34',background:'#fff',borderColor:'#E9ECF1'}}/>
-                <div style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'#8C98A6'}}><I.Mail/></div>
-              </div>
-            </div>
-            <div className="fg">
-              <label className="fl" style={{color:'#0B1D34'}}>Mot de passe</label>
-              <div style={{position:'relative'}}>
-                <input className="fi" type={showPw?'text':'password'} value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••••" style={{paddingLeft:38,paddingRight:38,color:'#0B1D34',background:'#fff',borderColor:'#E9ECF1'}}/>
-                <div style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'#8C98A6'}}><I.Lock/></div>
-                <button type="button" style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',color:'#8C98A6',background:'none',border:'none',cursor:'pointer'}} onClick={()=>setShowPw(!showPw)}><I.Eye/></button>
-              </div>
-            </div>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
-              <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'.82rem',color:'#8C98A6',cursor:'pointer'}}>
-                <input type="checkbox" defaultChecked style={{accentColor:'var(--t)'}}/> Se souvenir
-              </label>
-              <a href="#" style={{fontSize:'.82rem',color:'var(--t)',fontWeight:500}} onClick={e=>e.preventDefault()}>Mot de passe oublié ?</a>
-            </div>
-            <button type="submit" className="btn btn-t btn-lg" style={{width:'100%',justifyContent:'center'}} disabled={loading}>
-              {loading?<><div style={{width:16,height:16,border:'2px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/> Connexion...</>:'Se connecter'}
-            </button>
-          </form>
-          <div style={{textAlign:'center',marginTop:20,fontSize:'.78rem',color:'#8C98A6'}}>
-            Pas encore de compte ? <a href="#" style={{color:'var(--t)',fontWeight:600}} onClick={e=>e.preventDefault()}>Demander un accès</a>
-          </div>
-        </div>
+      <div style={{position:'relative',zIndex:1,marginTop:24,fontSize:'.72rem',color:'rgba(255,255,255,.35)',textAlign:'center'}}>
+        © 2026 VetCopilot · Plan Pro
       </div>
     </div>
   );

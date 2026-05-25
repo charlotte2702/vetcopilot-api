@@ -1,7 +1,7 @@
 // VetCopilot — service worker (cache basique pour usage offline)
 // Stratégie : network-first, cache-fallback.
 // Au déploiement, change CACHE_VERSION pour forcer le rafraîchissement.
-const CACHE_VERSION = "vetcopilot-v1";
+const CACHE_VERSION = "vetcopilot-v2";
 const PRECACHE = [
   "./",
   "./index.html",
