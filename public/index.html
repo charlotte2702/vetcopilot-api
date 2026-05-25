@@ -634,6 +634,19 @@ function teamMemberFullName(m){
   const prefix=m.role&&m.role.startsWith('Vétérinaire')?'Dr. ':'';
   return `${prefix}${m.firstName} ${m.lastName}`;
 }
+// Archive reason styling. Voluntarily muted/grey for deceased — respectful,
+// not a "tag of shame". Transferred + inactive use slightly warmer greys so
+// they still read as a status, not a celebration.
+const ARCHIVE_REASON_META={
+  deceased:    {label:'Décédé',    ic:'🕊️',color:'#6b7280',bg:'rgba(107,114,128,.12)',canReactivate:false},
+  transferred: {label:'Transféré', ic:'🔄',color:'#5a6470',bg:'rgba(90,100,112,.12)',  canReactivate:true},
+  inactive:    {label:'Inactif',   ic:'⏸️',color:'#8a909a',bg:'rgba(138,144,154,.12)', canReactivate:true},
+};
+function formatArchiveDate(iso){
+  if(!iso) return '';
+  try{return new Date(iso).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});}catch(_){return iso;}
+}
+
 const TEAM_STATUS_META={
   active:{label:'En service',color:'#16a34a',bg:'rgba(22,163,74,.12)'},
   off:   {label:'Absent',    color:'#e67e22',bg:'rgba(230,126,34,.12)'},
@@ -878,6 +891,29 @@ function App(){
     });
   },[]);
 
+  // Animal archive overlay: { [animalId]: { reason, archiveDate, deceasedDate? } }
+  // Sits next to the static ANIMALS data — that way archiving an animal
+  // doesn't mutate its medical record (history/CRs stay intact), it just flips
+  // its visibility in active lists.
+  const ARCHIVE_KEY='vet.archive.v1';
+  const[archive,setArchive]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(ARCHIVE_KEY)||'{}');}catch(_){return{};}
+  });
+  const archiveAnimal=useCallback((id,reason,deceasedDate)=>{
+    setArchive(prev=>{
+      const next={...prev,[id]:{reason,archiveDate:new Date().toISOString(),...(deceasedDate?{deceasedDate}:{})}};
+      try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify(next));}catch(_){}
+      return next;
+    });
+  },[]);
+  const reactivateAnimal=useCallback((id)=>{
+    setArchive(prev=>{
+      const next={...prev};delete next[id];
+      try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify(next));}catch(_){}
+      return next;
+    });
+  },[]);
+
   // Team-member photos: { [memberId]: dataUrl }. Same persistence pattern as
   // animal photos. `currentUserId` is the active member shown in the sidebar
   // and persists across reloads so refreshing doesn't bump back to Dr Martin.
@@ -997,7 +1033,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />
       ) : (
@@ -1300,21 +1336,22 @@ function Header({onMenu}){
 
 // ===== SEARCH OVERLAY =====
 function SearchOverlay(){
-  const{setSearchOpen,nav}=useContext(Ctx);
+  const{setSearchOpen,nav,archive}=useContext(Ctx);
   const[q,setQ]=useState('');
   const[sel,setSel]=useState(0);
   const allItems=useMemo(()=>{
     const items=[];
-    ANIMALS.forEach(a=>items.push({type:'Patient',nm:`${a.nm} — ${a.sp} (${a.breed})`,em:Em[a.av],action:()=>nav('animal-detail',a)}));
+    const archivedNames=new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm));
+    ANIMALS.filter(a=>!archive[a.id]).forEach(a=>items.push({type:'Patient',nm:`${a.nm} — ${a.sp} (${a.breed})`,em:Em[a.av],action:()=>nav('animal-detail',a)}));
     items.push({type:'Page',nm:'Tableau de bord',em:'📊',action:()=>nav('dashboard')});
     items.push({type:'Page',nm:'Agenda',em:'📅',action:()=>nav('schedule')});
     items.push({type:'Page',nm:'Assistant diagnostic IA',em:'🧠',action:()=>nav('diagnostic')});
     items.push({type:'Page',nm:'Comptes rendus',em:'📄',action:()=>nav('reports')});
     items.push({type:'Page',nm:'Facturation',em:'💶',action:()=>nav('billing')});
     items.push({type:'Page',nm:'Statistiques',em:'📈',action:()=>nav('stats')});
-    APTS.forEach(a=>items.push({type:'RDV',nm:`${a.t} — ${a.nm} (${a.rsn})`,em:Em[a.av],action:()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);else nav('schedule');}}));
+    APTS.filter(a=>!archivedNames.has(a.nm)).forEach(a=>items.push({type:'RDV',nm:`${a.t} — ${a.nm} (${a.rsn})`,em:Em[a.av],action:()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);else nav('schedule');}}));
     return items;
-  },[]);
+  },[archive]);
   const filtered=q?allItems.filter(i=>i.nm.toLowerCase().includes(q.toLowerCase())||i.type.toLowerCase().includes(q.toLowerCase())):allItems.slice(0,8);
   const handleKey=(e)=>{if(e.key==='ArrowDown')setSel(s=>Math.min(s+1,filtered.length-1));else if(e.key==='ArrowUp')setSel(s=>Math.max(s-1,0));else if(e.key==='Enter'&&filtered[sel]){filtered[sel].action();setSearchOpen(false);}else if(e.key==='Escape')setSearchOpen(false);};
   return(
@@ -1495,8 +1532,9 @@ function MobileNav(){
 
 // ===== MODAL =====
 function Modal(){
-  const{modal,setModal,toast}=useContext(Ctx);
+  const{modal,setModal,toast,archive}=useContext(Ctx);
   if(!modal) return null;
+  const ACTIVE_ANIMALS=ANIMALS.filter(a=>!(archive||{})[a.id]);
   return(
     <div className="modal-overlay" onClick={()=>setModal(null)}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -1528,7 +1566,7 @@ function Modal(){
             </div>
           </>}
           {modal.type==='newApt'&&<>
-            <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel">{ANIMALS.map(a=><option key={a.id}>{a.nm} — {a.sp} ({a.breed})</option>)}</select></div>
+            <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel">{ACTIVE_ANIMALS.map(a=><option key={a.id}>{a.nm} — {a.sp} ({a.breed})</option>)}</select></div>
             <div className="g2">
               <div className="fg"><label className="fl">Date</label><input className="fi" type="date" defaultValue="2026-05-12"/></div>
               <div className="fg"><label className="fl">Heure</label><input className="fi" type="time" defaultValue="09:00"/></div>
@@ -1567,8 +1605,8 @@ function Modal(){
           </>}
           {modal.type==='newInvoice'&&<>
             <div className="g2">
-              <div className="fg"><label className="fl">Client</label><select className="fi fi-sel">{[...new Set(ANIMALS.map(a=>a.owner))].map((o,i)=><option key={i}>{o}</option>)}</select></div>
-              <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel">{ANIMALS.map(a=><option key={a.id}>{a.nm}</option>)}</select></div>
+              <div className="fg"><label className="fl">Client</label><select className="fi fi-sel">{[...new Set(ACTIVE_ANIMALS.map(a=>a.owner))].map((o,i)=><option key={i}>{o}</option>)}</select></div>
+              <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel">{ACTIVE_ANIMALS.map(a=><option key={a.id}>{a.nm}</option>)}</select></div>
             </div>
             <div style={{marginBottom:12}}>
               <div style={{fontSize:'.76rem',fontWeight:700,marginBottom:8}}>Lignes de facture</div>
@@ -1593,10 +1631,79 @@ function Modal(){
           </>}
           {modal.type==='photoLink'&&<PhotoLinkModal url={modal.url} animalNm={modal.animalNm}/>}
           {modal.type==='newMember'&&<NewMemberForm/>}
+          {modal.type==='archive'&&<ArchiveAnimalForm animal={modal.animal}/>}
         </div>
       </div>
     </div>
   );
+}
+
+function ArchiveAnimalForm({animal}){
+  const{archiveAnimal,setModal,toast,nav}=useContext(Ctx);
+  const[reason,setReason]=useState(null);
+  const todayISO=new Date().toISOString().slice(0,10);
+  const[deceasedDate,setDeceasedDate]=useState(todayISO);
+  if(!animal) return null;
+
+  const REASONS=[
+    {key:'deceased',   ic:'🕊️',label:'Décédé',    desc:'L\'animal est décédé. Le dossier sera conservé en lecture seule.',                  confirmCopy:`Confirmer le décès de ${animal.nm} ? Cette action est définitive — le dossier ne pourra pas être réactivé.`,btn:'Confirmer le décès',btnClass:'btn-ghost'},
+    {key:'transferred',ic:'🔄',label:'Transféré', desc:'Le propriétaire a changé de clinique. Le dossier sera archivé mais réactivable.',  confirmCopy:`Archiver le dossier de ${animal.nm} comme transféré ? Le dossier sera retiré des listes actives mais conservé.`,        btn:'Archiver comme transféré',btnClass:'btn-o'},
+    {key:'inactive',   ic:'⏸️',label:'Inactif',   desc:'Plus de nouvelles depuis longtemps. Archivable, réactivable si l\'animal revient.', confirmCopy:`Marquer ${animal.nm} comme inactif ? Le dossier sera retiré des listes actives mais pourra être réactivé.`,            btn:'Marquer inactif',btnClass:'btn-o'},
+  ];
+
+  const confirm=()=>{
+    if(!reason) return;
+    const opts=reason.key==='deceased'?{date:deceasedDate}:{};
+    archiveAnimal(animal.id,reason.key,opts.date);
+    setModal(null);
+    const meta=ARCHIVE_REASON_META[reason.key];
+    toast(`${animal.nm} archivé · ${meta.label}`,'tl');
+    nav('animals');
+  };
+
+  // Step 1: pick a reason
+  if(!reason) return(<div>
+    <div style={{fontSize:'.86rem',color:'var(--txt2)',marginBottom:14,lineHeight:1.5}}>Choisissez la raison de l'archivage de <strong style={{color:'var(--txt)'}}>{animal.nm}</strong>.</div>
+    <div style={{display:'flex',flexDirection:'column',gap:8}}>
+      {REASONS.map(r=>(
+        <button key={r.key} type="button" onClick={()=>setReason(r)}
+          style={{display:'flex',gap:14,alignItems:'flex-start',padding:'14px 16px',borderRadius:12,border:'1px solid var(--lg)',background:'var(--card)',cursor:'pointer',textAlign:'left',width:'100%',transition:'all .15s',fontFamily:'inherit'}}
+          onMouseEnter={e=>{e.currentTarget.style.borderColor='var(--t)';e.currentTarget.style.background='rgba(43,160,143,.04)';}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--lg)';e.currentTarget.style.background='var(--card)';}}>
+          <span style={{fontSize:'1.6rem',lineHeight:1,flexShrink:0}}>{r.ic}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,color:'var(--txt)',fontSize:'.94rem',marginBottom:3}}>{r.label}</div>
+            <div style={{fontSize:'.8rem',color:'var(--txt2)',lineHeight:1.4}}>{r.desc}</div>
+          </div>
+          <span style={{color:'var(--mg)',alignSelf:'center',flexShrink:0}}>›</span>
+        </button>
+      ))}
+    </div>
+    <div style={{display:'flex',justifyContent:'flex-end',marginTop:14}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+    </div>
+  </div>);
+
+  // Step 2: confirm (with date input for deceased)
+  return(<div>
+    <button type="button" onClick={()=>setReason(null)} style={{background:'none',border:'none',color:'var(--t)',cursor:'pointer',fontSize:'.82rem',padding:0,marginBottom:14,fontFamily:'inherit'}}>← Changer la raison</button>
+    <div style={{padding:'14px 16px',background:reason.key==='deceased'?'rgba(107,114,128,.08)':'rgba(43,160,143,.06)',borderRadius:12,border:`1px solid ${reason.key==='deceased'?'rgba(107,114,128,.2)':'rgba(43,160,143,.2)'}`,marginBottom:14,display:'flex',gap:12,alignItems:'flex-start'}}>
+      <span style={{fontSize:'1.6rem',lineHeight:1}}>{reason.ic}</span>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700,color:'var(--txt)',marginBottom:4}}>{reason.label} — {animal.nm}</div>
+        <div style={{fontSize:'.84rem',color:'var(--txt2)',lineHeight:1.5}}>{reason.confirmCopy}</div>
+      </div>
+    </div>
+    {reason.key==='deceased'&&<div className="fg">
+      <label className="fl">Date du décès</label>
+      <input className="fi" type="date" value={deceasedDate} onChange={e=>setDeceasedDate(e.target.value)} max={todayISO}/>
+    </div>}
+    <div style={{fontSize:'.76rem',color:'var(--txt2)',marginBottom:14,fontStyle:'italic'}}>Le dossier médical (historique, comptes rendus, ordonnances) sera conservé.</div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+      <button type="button" className={`btn ${reason.btnClass}`} onClick={confirm} style={reason.key==='deceased'?{background:'#6b7280',color:'#fff',borderColor:'#6b7280'}:{}}>{reason.btn}</button>
+    </div>
+  </div>);
 }
 
 function NewMemberForm(){
@@ -1707,9 +1814,11 @@ function PhotoLinkModal({url,animalNm}){
 
 // ===== DASHBOARD =====
 function Dashboard(){
-  const{nav,setModal,toast}=useContext(Ctx);
+  const{nav,setModal,toast,archive}=useContext(Ctx);
   const chartRef=useRef(null);const chartInst=useRef(null);
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
+  const activeApts=APTS.filter(a=>!archivedNames.has(a.nm));
   useEffect(()=>{
     if(!chartRef.current)return;
     if(chartInst.current)chartInst.current.destroy();
@@ -1757,7 +1866,7 @@ function Dashboard(){
             <div className="c-title">Prochains rendez-vous</div>
             <button className="btn btn-sm btn-o" onClick={()=>nav('schedule')}>Voir tout</button>
           </div>
-          {APTS.slice(0,5).map(a=>(
+          {activeApts.slice(0,5).map(a=>(
             <div key={a.id} className="apt apt-bg" onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
               <div className="apt-time">{a.t}</div>
               <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
@@ -2151,10 +2260,11 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
 
 // ===== SCHEDULE (WEEK VIEW) =====
 function Schedule(){
-  const{nav,setModal}=useContext(Ctx);
+  const{nav,setModal,archive}=useContext(Ctx);
   const[view,setView]=useState('list');
   const[filter,setFilter]=useState('all');
-  const filtered=APTS.filter(a=>filter==='all'||(filter==='martin'&&a.vet==='Dr. Martin')||(filter==='durand'&&a.vet==='Dr. Durand'));
+  const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
+  const filtered=APTS.filter(a=>!archivedNames.has(a.nm)).filter(a=>filter==='all'||(filter==='martin'&&a.vet==='Dr. Martin')||(filter==='durand'&&a.vet==='Dr. Durand'));
   const days=['Lun 12','Mar 13','Mer 14','Jeu 15','Ven 16','Sam 17'];
   const hours=['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'];
   const evts=[
@@ -2206,41 +2316,99 @@ function Schedule(){
 
 // ===== ANIMALS =====
 function Animals(){
-  const{nav,setModal}=useContext(Ctx);
+  const{nav,setModal,archive,reactivateAnimal,toast}=useContext(Ctx);
+  const[tab,setTab]=useState('active'); // 'active' | 'archived'
   const[search,setSearch]=useState('');
   const[sp,setSp]=useState('all');
   const[sortBy,setSortBy]=useState('nm');
-  const filtered=ANIMALS.filter(a=>{const ms=a.nm.toLowerCase().includes(search.toLowerCase())||a.owner.toLowerCase().includes(search.toLowerCase())||a.breed.toLowerCase().includes(search.toLowerCase());const msp=sp==='all'||a.sp.toLowerCase()===sp;return ms&&msp;}).sort((a,b)=>sortBy==='nm'?a.nm.localeCompare(b.nm):a.owner.localeCompare(b.owner));
+
+  // Split active vs archived once — both lists need the same search/species filter.
+  const matchesQuery=(a)=>{
+    const ms=a.nm.toLowerCase().includes(search.toLowerCase())||a.owner.toLowerCase().includes(search.toLowerCase())||a.breed.toLowerCase().includes(search.toLowerCase());
+    const msp=sp==='all'||a.sp.toLowerCase()===sp;
+    return ms&&msp;
+  };
+  const allActive=ANIMALS.filter(a=>!archive[a.id]);
+  const allArchived=ANIMALS.filter(a=>!!archive[a.id]);
+  const activeFiltered=allActive.filter(matchesQuery).sort((a,b)=>sortBy==='nm'?a.nm.localeCompare(b.nm):a.owner.localeCompare(b.owner));
+  const archivedFiltered=allArchived.filter(matchesQuery).sort((a,b)=>(archive[b.id]?.archiveDate||'').localeCompare(archive[a.id]?.archiveDate||''));
+
+  const handleReactivate=(e,a)=>{
+    e.stopPropagation();
+    const meta=ARCHIVE_REASON_META[archive[a.id]?.reason];
+    if(!meta||!meta.canReactivate) return;
+    reactivateAnimal(a.id);
+    toast(`${a.nm} réactivé dans la liste des patients`,'tl');
+  };
+
   return(<div>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
-      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-        <div className="hdr-search" style={{width:220}}><I.Search/><input placeholder="Nom, race, propriétaire..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
-        <select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={sp} onChange={e=>setSp(e.target.value)}><option value="all">Toutes espèces</option><option value="chien">Chiens</option><option value="chat">Chats</option><option value="perroquet">Perroquets</option><option value="lapin">Lapins</option></select>
-        <select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="nm">Tri: Nom</option><option value="owner">Tri: Propriétaire</option></select>
+    {/* Header: tabs + filters + new */}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:10}}>
+      <div className="tabs" style={{marginBottom:0,maxWidth:360}}>
+        <button className={`tab ${tab==='active'?'on':''}`} onClick={()=>setTab('active')}>Actifs ({allActive.length})</button>
+        <button className={`tab ${tab==='archived'?'on':''}`} onClick={()=>setTab('archived')}>Archives ({allArchived.length})</button>
       </div>
-      <div style={{display:'flex',gap:6}}>
-        <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouvel animal',type:'newAnimal'})}><I.Plus/> Nouvel animal</button>
+      <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouvel animal',type:'newAnimal'})}><I.Plus/> Nouvel animal</button>
+    </div>
+    <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:12}}>
+      <div className="hdr-search" style={{width:220}}><I.Search/><input placeholder="Nom, race, propriétaire..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
+      <select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={sp} onChange={e=>setSp(e.target.value)}><option value="all">Toutes espèces</option><option value="chien">Chiens</option><option value="chat">Chats</option><option value="perroquet">Perroquets</option><option value="lapin">Lapins</option></select>
+      {tab==='active'&&<select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="nm">Tri: Nom</option><option value="owner">Tri: Propriétaire</option></select>}
+    </div>
+
+    {tab==='active'&&<>
+      <div style={{fontSize:'.76rem',color:'var(--txt2)',marginBottom:10}}>{activeFiltered.length} patient{activeFiltered.length>1?'s':''} trouvé{activeFiltered.length>1?'s':''}</div>
+      <div className="c af" style={{padding:0,overflow:'auto'}}>
+        <table className="tbl"><thead><tr><th>Animal</th><th>Espèce / Race</th><th>Âge</th><th>Sexe</th><th>Poids</th><th>Propriétaire</th><th>Statut</th><th></th></tr></thead>
+          <tbody>{activeFiltered.map(a=>(
+            <tr key={a.id} style={{cursor:'pointer'}} onClick={()=>nav('animal-detail',a)}>
+              <td><div style={{display:'flex',alignItems:'center',gap:9}}><div className={`apt-av ${a.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem'}}><AnimalAvatar animal={a}/></div><span style={{fontWeight:600}}>{a.nm}</span></div></td>
+              <td>{a.sp} · {a.breed}</td><td>{a.age}</td><td>{a.sex==='M'?'♂':'♀'}</td><td>{a.wt}</td><td>{a.owner}</td>
+              <td>{a.allergy.length>0&&<span className="tag tag-r" style={{marginRight:4}}>⚠ Allergies</span>}<span className="tag tag-t">À jour</span></td>
+              <td style={{color:'var(--mg)'}}><I.ChevR/></td>
+            </tr>
+          ))}</tbody>
+        </table>
       </div>
-    </div>
-    <div style={{fontSize:'.76rem',color:'var(--txt2)',marginBottom:10}}>{filtered.length} patient{filtered.length>1?'s':''} trouvé{filtered.length>1?'s':''}</div>
-    <div className="c af" style={{padding:0,overflow:'auto'}}>
-      <table className="tbl"><thead><tr><th>Animal</th><th>Espèce / Race</th><th>Âge</th><th>Sexe</th><th>Poids</th><th>Propriétaire</th><th>Statut</th><th></th></tr></thead>
-        <tbody>{filtered.map(a=>(
-          <tr key={a.id} style={{cursor:'pointer'}} onClick={()=>nav('animal-detail',a)}>
-            <td><div style={{display:'flex',alignItems:'center',gap:9}}><div className={`apt-av ${a.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem'}}><AnimalAvatar animal={a}/></div><span style={{fontWeight:600}}>{a.nm}</span></div></td>
-            <td>{a.sp} · {a.breed}</td><td>{a.age}</td><td>{a.sex==='M'?'♂':'♀'}</td><td>{a.wt}</td><td>{a.owner}</td>
-            <td>{a.allergy.length>0&&<span className="tag tag-r" style={{marginRight:4}}>⚠ Allergies</span>}<span className="tag tag-t">À jour</span></td>
-            <td style={{color:'var(--mg)'}}><I.ChevR/></td>
-          </tr>
-        ))}</tbody>
-      </table>
-    </div>
+    </>}
+
+    {tab==='archived'&&<>
+      <div style={{fontSize:'.76rem',color:'var(--txt2)',marginBottom:10}}>{archivedFiltered.length} dossier{archivedFiltered.length>1?'s':''} archivé{archivedFiltered.length>1?'s':''}</div>
+      {archivedFiltered.length===0
+        ? <div className="c af" style={{padding:42,textAlign:'center',color:'var(--txt2)'}}>Aucun dossier archivé.</div>
+        : <div className="c af" style={{padding:0,overflow:'auto'}}>
+          <table className="tbl"><thead><tr><th>Animal</th><th>Espèce / Race</th><th>Propriétaire</th><th>Raison</th><th>Date d'archivage</th><th></th></tr></thead>
+            <tbody>{archivedFiltered.map(a=>{
+              const info=archive[a.id]||{};
+              const meta=ARCHIVE_REASON_META[info.reason]||ARCHIVE_REASON_META.inactive;
+              return(<tr key={a.id} style={{cursor:'pointer',opacity:.92}} onClick={()=>nav('animal-detail',a)}>
+                <td><div style={{display:'flex',alignItems:'center',gap:9}}>
+                  <div className={`apt-av ${a.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem',filter:'grayscale(.4)',opacity:.85}}><AnimalAvatar animal={a}/></div>
+                  <span style={{fontWeight:600,color:'var(--txt2)'}}>{a.nm}</span>
+                </div></td>
+                <td style={{color:'var(--txt2)'}}>{a.sp} · {a.breed}</td>
+                <td style={{color:'var(--txt2)'}}>{a.owner}</td>
+                <td><span style={{padding:'3px 9px',borderRadius:10,fontSize:'.72rem',fontWeight:600,background:meta.bg,color:meta.color}}>{meta.ic} {meta.label}</span>{info.reason==='deceased'&&info.deceasedDate&&<span style={{fontSize:'.72rem',color:'var(--txt2)',marginLeft:8}}>· {formatArchiveDate(info.deceasedDate)}</span>}</td>
+                <td style={{color:'var(--txt2)',fontSize:'.82rem'}}>{formatArchiveDate(info.archiveDate)}</td>
+                <td style={{textAlign:'right'}}>
+                  {meta.canReactivate
+                    ? <button className="btn btn-sm btn-o" onClick={(e)=>handleReactivate(e,a)}>Réactiver</button>
+                    : <span style={{color:'var(--mg)',fontSize:'.72rem',fontStyle:'italic'}}>—</span>}
+                </td>
+              </tr>);
+            })}</tbody>
+          </table>
+        </div>}
+    </>}
   </div>);
 }
 
 // ===== ANIMAL DETAIL =====
 function AnimalDetail(){
-  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto,archive,reactivateAnimal}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const archiveInfo=archive[a.id];
+  const isArchived=!!archiveInfo;
+  const archiveMeta=isArchived?(ARCHIVE_REASON_META[archiveInfo.reason]||ARCHIVE_REASON_META.inactive):null;
   const[tab,setTab]=useState('overview');
   const chartRef=useRef(null);const chartInst=useRef(null);
   const photoInputRef=useRef(null);
@@ -2324,6 +2492,16 @@ function AnimalDetail(){
   },[tab,a,isDark]);
   return(<div>
     <button className="btn btn-sm btn-o" style={{marginBottom:16}} onClick={()=>nav('animals')}>← Retour aux patients</button>
+    {isArchived&&<div style={{padding:'12px 16px',background:archiveMeta.bg,border:`1px solid ${archiveMeta.color}33`,borderRadius:12,marginBottom:16,display:'flex',gap:12,alignItems:'center'}}>
+      <span style={{fontSize:'1.4rem'}}>{archiveMeta.ic}</span>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700,color:archiveMeta.color,fontSize:'.92rem'}}>Dossier archivé · {archiveMeta.label}</div>
+        <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:2}}>
+          {archiveInfo.reason==='deceased'&&archiveInfo.deceasedDate?`Décès le ${formatArchiveDate(archiveInfo.deceasedDate)} · `:''}
+          Archivé le {formatArchiveDate(archiveInfo.archiveDate)} · Consultation en lecture seule
+        </div>
+      </div>
+    </div>}
     <div className="c af" style={{marginBottom:18}}>
       <div style={{display:'flex',gap:22,alignItems:'flex-start',flexWrap:'wrap'}}>
         <div style={{position:'relative',flexShrink:0}}>
@@ -2359,10 +2537,14 @@ function AnimalDetail(){
             <button className="btn btn-sm btn-ghost" onClick={requestPhotoLink} disabled={reqLinkBusy} title="Envoyer un lien au propriétaire pour qu'il prenne une photo">📱 {reqLinkBusy?'Génération...':'Demander photo'}</button>
           </div>
         </div>
-        <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>
-          <button className="btn btn-t btn-sm" onClick={()=>nav('consultation')}><I.Play/> Consultation</button>
-          <button className="btn btn-o btn-sm" onClick={()=>nav('diagnostic')}><I.Brain/> Diagnostic</button>
-          <button className="btn btn-g btn-sm" onClick={()=>setModal({title:'Ordonnance',type:'prescription',animal:`${a.nm} — ${a.breed}`})}><I.Rx/> Ordonnance</button>
+        <div style={{display:'flex',gap:7,flexWrap:'wrap',alignItems:'flex-start'}}>
+          {!isArchived&&<>
+            <button className="btn btn-t btn-sm" onClick={()=>nav('consultation')}><I.Play/> Consultation</button>
+            <button className="btn btn-o btn-sm" onClick={()=>nav('diagnostic')}><I.Brain/> Diagnostic</button>
+            <button className="btn btn-g btn-sm" onClick={()=>setModal({title:'Ordonnance',type:'prescription',animal:`${a.nm} — ${a.breed}`})}><I.Rx/> Ordonnance</button>
+            <button className="btn btn-sm btn-ghost" title="Archiver ce dossier" onClick={()=>setModal({type:'archive',title:`Archiver ${a.nm}`,animal:a})}>📦 Archiver</button>
+          </>}
+          {isArchived&&archiveMeta.canReactivate&&<button className="btn btn-sm btn-t" onClick={()=>{reactivateAnimal(a.id);toast(`${a.nm} réactivé dans la liste des patients`,'tl');}}>Réactiver le dossier</button>}
         </div>
       </div>
     </div>
