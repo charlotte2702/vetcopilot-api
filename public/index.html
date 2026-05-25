@@ -891,6 +891,22 @@ function App(){
     });
   },[]);
 
+  // Manual acts overlay: { [animalId]: [act, ...] }. Vet records quick acts
+  // (vaccination, weighing, etc.) without going through the full SOAP/IA flow.
+  // Persisted in localStorage so refreshes don't lose them.
+  const MANUAL_ACTS_KEY='vet.manualActs.v1';
+  const[manualActs,setManualActs]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(MANUAL_ACTS_KEY)||'{}');}catch(_){return{};}
+  });
+  const addManualAct=useCallback((animalId,act)=>{
+    setManualActs(prev=>{
+      const list=prev[animalId]||[];
+      const next={...prev,[animalId]:[{...act,id:act.id||Date.now()},...list]};
+      try{localStorage.setItem(MANUAL_ACTS_KEY,JSON.stringify(next));}catch(_){}
+      return next;
+    });
+  },[]);
+
   // Animal archive overlay: { [animalId]: { reason, archiveDate, deceasedDate? } }
   // Sits next to the static ANIMALS data — that way archiving an animal
   // doesn't mutate its medical record (history/CRs stay intact), it just flips
@@ -1033,7 +1049,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />
       ) : (
@@ -1632,10 +1648,90 @@ function Modal(){
           {modal.type==='photoLink'&&<PhotoLinkModal url={modal.url} animalNm={modal.animalNm}/>}
           {modal.type==='newMember'&&<NewMemberForm/>}
           {modal.type==='archive'&&<ArchiveAnimalForm animal={modal.animal}/>}
+          {modal.type==='quickAct'&&<QuickActForm animalId={modal.animalId}/>}
         </div>
       </div>
     </div>
   );
+}
+
+const ACT_TYPES_LIST=['Vaccination','Rappel vaccin','Vermifuge','Détartrage','Contrôle annuel','Pesée','Coupe de griffes','Prise de sang','Pose de puce','Stérilisation','Autre'];
+function isVaccinationType(t){return t==='Vaccination'||t==='Rappel vaccin';}
+function formatDateFR(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso||'');return m?`${m[3]}/${m[2]}/${m[1]}`:iso||'';}
+function addOneYearISO(iso){const d=new Date(iso);if(isNaN(d.getTime())) return '';d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);}
+
+function QuickActForm({animalId}){
+  const{addManualAct,teamMembers,toast,setModal}=useContext(Ctx);
+  const animal=ANIMALS.find(a=>a.id===animalId);
+  const vets=(teamMembers||[]).filter(m=>m.role&&m.role.startsWith('Vétérinaire'));
+  const todayISO=new Date().toISOString().slice(0,10);
+  const[date,setDate]=useState(todayISO);
+  const[type,setType]=useState('Vaccination');
+  const[vetId,setVetId]=useState(vets[0]?.id||1);
+  const[notes,setNotes]=useState('');
+  const[weight,setWeight]=useState('');
+  const[vaccineName,setVaccineName]=useState('');
+
+  if(!animal) return <div style={{color:'var(--txt2)'}}>Animal introuvable.</div>;
+
+  const showVaccine=isVaccinationType(type);
+  const nextDateISO=showVaccine?addOneYearISO(date):'';
+
+  const submit=(e)=>{
+    e&&e.preventDefault&&e.preventDefault();
+    if(!type){toast('Sélectionnez un type d\'acte','r');return;}
+    if(showVaccine&&!vaccineName.trim()){toast('Indiquez le nom du vaccin','r');return;}
+    const vet=vets.find(v=>v.id===vetId)||vets[0];
+    const act={
+      date,
+      dateDisplay:formatDateFR(date),
+      type,
+      vet:vet?teamMemberFullName(vet):'Dr. Martin',
+      vetId:vet?.id,
+      notes:notes.trim(),
+      ...(weight?{weight:Number(weight)}:{}),
+      ...(showVaccine?{vaccineName:vaccineName.trim(),nextDate:formatDateFR(nextDateISO),nextDateISO}:{}),
+    };
+    addManualAct(animalId,act);
+    setModal(null);
+    toast(`${type}${showVaccine?' · '+vaccineName:''} ajouté à l'historique de ${animal.nm}`,'tl');
+  };
+
+  return(<form onSubmit={submit}>
+    <div className="g2">
+      <div className="fg"><label className="fl">Date</label><input className="fi" type="date" value={date} onChange={e=>setDate(e.target.value)} max={todayISO} required/></div>
+      <div className="fg"><label className="fl">Type d'acte</label>
+        <select className="fi fi-sel" value={type} onChange={e=>setType(e.target.value)}>
+          {ACT_TYPES_LIST.map(t=><option key={t}>{t}</option>)}
+        </select>
+      </div>
+    </div>
+    {showVaccine&&<div className="fg">
+      <label className="fl">Nom du vaccin</label>
+      <input className="fi" value={vaccineName} onChange={e=>setVaccineName(e.target.value)} placeholder="Ex: Rage, CHPL, Leptospirose..." required/>
+      <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:6}}>Prochain rappel calculé automatiquement : <strong style={{color:'var(--t)'}}>{formatDateFR(nextDateISO)}</strong> (1 an)</div>
+    </div>}
+    <div className="g2">
+      <div className="fg"><label className="fl">Vétérinaire</label>
+        <select className="fi fi-sel" value={vetId} onChange={e=>setVetId(Number(e.target.value))}>
+          {vets.length===0?<option value={0}>Aucun vétérinaire</option>:vets.map(v=><option key={v.id} value={v.id}>{teamMemberFullName(v)}</option>)}
+        </select>
+      </div>
+      <div className="fg"><label className="fl">Poids actuel <span style={{color:'var(--mg)',fontWeight:400,textTransform:'none',letterSpacing:0}}>(optionnel)</span></label>
+        <div style={{position:'relative'}}>
+          <input className="fi" type="number" step="0.1" min="0" value={weight} onChange={e=>setWeight(e.target.value)} placeholder={animal.wt||'kg'} style={{paddingRight:36}}/>
+          <span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:'.78rem',color:'var(--txt2)',pointerEvents:'none'}}>kg</span>
+        </div>
+      </div>
+    </div>
+    <div className="fg"><label className="fl">Notes <span style={{color:'var(--mg)',fontWeight:400,textTransform:'none',letterSpacing:0}}>(optionnel)</span></label>
+      <textarea className="fi" rows={3} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Observations, lot vaccin, posologie..."/>
+    </div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+      <button type="submit" className="btn btn-t"><I.Check/> Enregistrer</button>
+    </div>
+  </form>);
 }
 
 function ArchiveAnimalForm({animal}){
@@ -2405,7 +2501,13 @@ function Animals(){
 
 // ===== ANIMAL DETAIL =====
 function AnimalDetail(){
-  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto,archive,reactivateAnimal}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto,archive,reactivateAnimal,manualActs}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const animalManualActs=(manualActs||{})[a.id]||[];
+  // Manual vaccinations get merged into the existing static vacc list.
+  const manualVaccs=animalManualActs.filter(x=>x.type==='Vaccination'||x.type==='Rappel vaccin').map(x=>({
+    nm:x.vaccineName||x.type,dt:x.dateDisplay,st:'ok',_manual:true,nextDate:x.nextDate,
+  }));
+  const allVaccs=[...manualVaccs,...a.vacc];
   const archiveInfo=archive[a.id];
   const isArchived=!!archiveInfo;
   const archiveMeta=isArchived?(ARCHIVE_REASON_META[archiveInfo.reason]||ARCHIVE_REASON_META.inactive):null;
@@ -2556,8 +2658,35 @@ function AnimalDetail(){
         <div style={{width:8,height:8,borderRadius:'50%',background:h.type==='emergency'?'#e74c3c':h.type==='surgery'?'var(--g)':'var(--t)',flexShrink:0}}/>
         <div style={{flex:1}}><span style={{fontSize:'.86rem',color:'var(--txt)'}}>{h.t}</span><div style={{fontSize:'.72rem',color:'var(--txt2)',marginTop:2}}>{h.d} · <span className="tag" style={{fontSize:'.6rem',padding:'1px 6px',background:h.type==='emergency'?'rgba(231,76,60,.1)':h.type==='surgery'?'rgba(200,164,92,.1)':'rgba(43,160,143,.1)',color:h.type==='emergency'?'#e74c3c':h.type==='surgery'?'var(--g)':'var(--t)'}}>{h.type==='emergency'?'Urgence':h.type==='surgery'?'Chirurgie':h.type==='follow-up'?'Suivi':h.type==='vaccination'?'Vaccination':'Consultation'}</span></div></div>
       </div>)}</div></div>}
-    {tab==='vaccinations'&&<div className="c af2"><div className="c-title" style={{marginBottom:14}}>Statut vaccinal</div>{a.vacc.map((v,i)=><div key={i} className="vacc"><div className={`vacc-dot ${v.st}`}/><div style={{flex:1}}><div style={{fontWeight:600,fontSize:'.88rem',color:'var(--txt)'}}>{v.nm}</div><div style={{fontSize:'.74rem',color:'var(--txt2)'}}>Date: {v.dt}</div></div><span className={`tag ${v.st==='ok'?'tag-t':v.st==='soon'?'tag-g':'tag-r'}`}>{stL[v.st]}</span></div>)}</div>}
-    {tab==='history'&&<div className="c af2"><div className="c-title" style={{marginBottom:14}}>Historique complet</div>{a.hist.map((h,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'12px 0',borderBottom:i<a.hist.length-1?'1px solid var(--bg)':'none'}}><I.File/><div style={{flex:1}}><span style={{fontSize:'.88rem',color:'var(--txt)'}}>{h.t}</span><div style={{fontSize:'.72rem',color:'var(--txt2)'}}>{h.d}</div></div></div>)}</div>}
+    {tab==='vaccinations'&&<div className="c af2"><div className="c-title" style={{marginBottom:14}}>Statut vaccinal</div>{allVaccs.length===0?<div style={{color:'var(--txt2)',fontSize:'.86rem',padding:'12px 0'}}>Aucune vaccination enregistrée.</div>:allVaccs.map((v,i)=><div key={i} className="vacc"><div className={`vacc-dot ${v.st}`}/><div style={{flex:1}}><div style={{fontWeight:600,fontSize:'.88rem',color:'var(--txt)'}}>{v.nm}{v._manual&&<span style={{marginLeft:8,padding:'1px 7px',borderRadius:8,fontSize:'.64rem',fontWeight:700,background:'rgba(138,144,154,.15)',color:'#6b7280',textTransform:'uppercase',letterSpacing:'.04em'}}>Manuel</span>}</div><div style={{fontSize:'.74rem',color:'var(--txt2)'}}>Date: {v.dt}{v.nextDate?<span style={{marginLeft:8,color:'var(--mg)'}}>· Rappel : {v.nextDate}</span>:''}</div></div><span className={`tag ${v.st==='ok'?'tag-t':v.st==='soon'?'tag-g':'tag-r'}`}>{stL[v.st]}</span></div>)}</div>}
+    {tab==='history'&&<div className="c af2">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:8}}>
+        <div className="c-title">Historique complet</div>
+        {!isArchived&&<button className="btn btn-t btn-sm" onClick={()=>setModal({type:'quickAct',title:`Ajouter un acte — ${a.nm}`,animalId:a.id})}><I.Plus/> Ajouter un acte</button>}
+      </div>
+      {animalManualActs.length===0&&a.hist.length===0&&<div style={{color:'var(--txt2)',fontSize:'.86rem',padding:'12px 0'}}>Aucun antécédent enregistré.</div>}
+      {animalManualActs.map((h,i)=>(<div key={`m${h.id}`} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'12px 0',borderBottom:'1px solid var(--bg)'}}>
+        <div style={{width:32,height:32,borderRadius:9,background:'rgba(138,144,154,.12)',color:'#6b7280',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'.95rem',flexShrink:0}}>📋</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:'.88rem',color:'var(--txt)',fontWeight:600}}>{h.type}{h.vaccineName?` — ${h.vaccineName}`:''}</span>
+            <span style={{padding:'1px 7px',borderRadius:8,fontSize:'.64rem',fontWeight:700,background:'rgba(138,144,154,.15)',color:'#6b7280',textTransform:'uppercase',letterSpacing:'.04em'}}>Manuel</span>
+          </div>
+          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:3}}>{h.dateDisplay} · {h.vet}{h.weight?` · Poids : ${h.weight} kg`:''}{h.nextDate?` · Rappel prévu : ${h.nextDate}`:''}</div>
+          {h.notes&&<div style={{fontSize:'.78rem',color:'var(--txt)',marginTop:6,padding:'8px 10px',background:'var(--bg)',borderRadius:8,lineHeight:1.45}}>{h.notes}</div>}
+        </div>
+      </div>))}
+      {a.hist.map((h,i)=>(<div key={`h${i}`} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'12px 0',borderBottom:i<a.hist.length-1?'1px solid var(--bg)':'none'}}>
+        <div style={{width:32,height:32,borderRadius:9,background:'rgba(43,160,143,.1)',color:'var(--t)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><I.File/></div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:'.88rem',color:'var(--txt)',fontWeight:600}}>{h.t}</span>
+            <span style={{padding:'1px 7px',borderRadius:8,fontSize:'.64rem',fontWeight:700,background:'rgba(43,160,143,.12)',color:'var(--t)',textTransform:'uppercase',letterSpacing:'.04em'}}>IA</span>
+          </div>
+          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:3}}>{h.d}</div>
+        </div>
+      </div>))}
+    </div>}
     {tab==='documents'&&<div className="c af2">
       <div className="c-title" style={{marginBottom:14}}>Documents et fichiers</div>
       <div className="drop-zone">
