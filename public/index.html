@@ -928,6 +928,27 @@ function App(){
   // global shortcuts can all read it from Ctx.
   const[voiceOpen,setVoiceOpen]=useState(false);
 
+  // User-created appointments. The static APTS const stays untouched (mock
+  // "today's" schedule); customApts piles new RDVs created via the modal and
+  // persists them in localStorage so the planning survives refreshes.
+  const APTS_KEY='vet.apts.v1';
+  const[customApts,setCustomApts]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(APTS_KEY)||'[]');}catch(_){return[];}
+  });
+  const persistApts=(next)=>{try{localStorage.setItem(APTS_KEY,JSON.stringify(next));}catch(_){}};
+  const addAppointment=useCallback((apt)=>{
+    setCustomApts(prev=>{
+      const next=[{...apt,_custom:true,id:apt.id||'apt-'+Date.now()},...prev];
+      persistApts(next);return next;
+    });
+  },[]);
+  const removeAppointment=useCallback((id)=>{
+    setCustomApts(prev=>{
+      const next=prev.filter(a=>a.id!==id);
+      persistApts(next);return next;
+    });
+  },[]);
+
   // Manual acts overlay: { [animalId]: [act, ...] }. Vet records quick acts
   // (vaccination, weighing, etc.) without going through the full SOAP/IA flow.
   // Persisted in localStorage so refreshes don't lose them.
@@ -1105,7 +1126,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />
       ) : (
@@ -1720,24 +1741,7 @@ function Modal(){
               <button className="btn btn-t" onClick={()=>{setModal(null);toast('Animal enregistré avec succès','tl');}}>Enregistrer</button>
             </div>
           </>}
-          {modal.type==='newApt'&&<>
-            <div className="fg"><label className="fl">Patient</label><select className="fi fi-sel">{ACTIVE_ANIMALS.map(a=><option key={a.id}>{a.nm} — {a.sp} ({a.breed})</option>)}</select></div>
-            <div className="g2">
-              <div className="fg"><label className="fl">Date</label><input className="fi" type="date" defaultValue="2026-05-12"/></div>
-              <div className="fg"><label className="fl">Heure</label><input className="fi" type="time" defaultValue="09:00"/></div>
-            </div>
-            <div className="g2">
-              <div className="fg"><label className="fl">Vétérinaire</label><select className="fi fi-sel"><option>Dr. Martin</option><option>Dr. Durand</option><option>Dr. Petit</option></select></div>
-              <div className="fg"><label className="fl">Durée</label><select className="fi fi-sel"><option>15 min</option><option selected>30 min</option><option>45 min</option><option>60 min</option></select></div>
-            </div>
-            <div className="fg"><label className="fl">Motif</label><input className="fi" placeholder="Motif de la consultation"/></div>
-            <div className="fg"><label className="fl">Priorité</label><select className="fi fi-sel"><option>Normale</option><option>Urgente</option></select></div>
-            <div className="fg"><label className="fl">Notes</label><textarea className="fi" rows={3} placeholder="Notes supplémentaires..."/></div>
-            <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
-              <button className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
-              <button className="btn btn-t" onClick={()=>{setModal(null);toast('Rendez-vous créé','tl');}}>Planifier</button>
-            </div>
-          </>}
+          {modal.type==='newApt'&&<NewAptForm prefill={modal.prefill}/>}
           {modal.type==='prescription'&&<>
             <div className="fg"><label className="fl">Patient</label><input className="fi" defaultValue={modal.animal||'Rex — Labrador'} readOnly style={{background:'var(--bg)'}}/></div>
             <div style={{marginBottom:12}}>
@@ -1794,10 +1798,132 @@ function Modal(){
   );
 }
 
+// 15-min slots 08:00 → 19:00 inclusive
+const APT_TIME_SLOTS=(()=>{const s=[];for(let h=8;h<=19;h++){for(let m=0;m<60;m+=15){if(h===19&&m>0)break;s.push(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`);}}return s;})();
+const APT_DURATIONS=[{v:15,l:'15 min'},{v:30,l:'30 min'},{v:45,l:'45 min'},{v:60,l:'1 h'}];
+const APT_TYPES=[
+  {v:'Consultation',color:'#2BA08F',st:'ok'},
+  {v:'Vaccination', color:'#C8A45C',st:'ok'},
+  {v:'Chirurgie',   color:'#9b59b6',st:'wait'},
+  {v:'Urgence',     color:'#e74c3c',st:'urg'},
+  {v:'Contrôle',    color:'#2BA08F',st:'ok'},
+  {v:'Détartrage',  color:'#C8A45C',st:'wait'},
+  {v:'Autre',       color:'#5a6470',st:'ok'},
+];
+// Convert HH:MM → minutes since 00:00 for overlap math
+function timeToMin(t){const[h,m]=String(t||'').split(':').map(Number);return(h||0)*60+(m||0);}
+// Two apts overlap if [start, start+dur) intervals intersect for the same vet+date.
+function aptsConflict(a,b){
+  if(!a||!b) return false;
+  if(a.vet!==b.vet) return false;
+  if((a.date||'')!==(b.date||'')) return false;
+  const aS=timeToMin(a.t),aE=aS+(a.dur||30);
+  const bS=timeToMin(b.t),bE=bS+(b.dur||30);
+  return aS<bE&&bS<aE;
+}
+// Next available slot for the same vet+date+duration after the requested one.
+function nextFreeSlot({date,vet,dur,fromTime},existing){
+  const candidates=APT_TIME_SLOTS.filter(s=>timeToMin(s)>=timeToMin(fromTime||'08:00'));
+  for(const t of candidates){
+    const trial={date,vet,dur,t};
+    if(!existing.some(e=>aptsConflict(trial,e))) return t;
+  }
+  return null;
+}
+
 const ACT_TYPES_LIST=['Vaccination','Rappel vaccin','Vermifuge','Détartrage','Contrôle annuel','Pesée','Coupe de griffes','Prise de sang','Pose de puce','Stérilisation','Autre'];
 function isVaccinationType(t){return t==='Vaccination'||t==='Rappel vaccin';}
 function formatDateFR(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso||'');return m?`${m[3]}/${m[2]}/${m[1]}`:iso||'';}
 function addOneYearISO(iso){const d=new Date(iso);if(isNaN(d.getTime())) return '';d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);}
+
+function NewAptForm({prefill}){
+  const{addAppointment,addNotif,customApts,archive,teamMembers,setModal,toast}=useContext(Ctx);
+  const todayISO=new Date().toISOString().slice(0,10);
+  const activeAnimals=ANIMALS.filter(a=>!(archive||{})[a.id]);
+  const vets=(teamMembers||[]).filter(m=>m.role&&m.role.startsWith('Vétérinaire'));
+  const[animalId,setAnimalId]=useState(prefill?.animalId||activeAnimals[0]?.id||1);
+  const[date,setDate]=useState(prefill?.date||todayISO);
+  const[time,setTime]=useState(prefill?.time||'09:00');
+  const[dur,setDur]=useState(30);
+  const[type,setType]=useState('Consultation');
+  const[vetId,setVetId]=useState(vets[0]?.id||1);
+  const[notes,setNotes]=useState('');
+
+  const animal=activeAnimals.find(a=>a.id===Number(animalId))||activeAnimals[0];
+  const vet=vets.find(v=>v.id===Number(vetId))||vets[0];
+  const vetName=vet?teamMemberFullName(vet):'Dr. Jean Martin';
+
+  // Conflict detection: only against persisted customApts (static APTS use a
+  // different shape with no `date` — treated as a separate, mock day).
+  const trial={date,t:time,dur,vet:vetName};
+  const conflict=customApts.find(a=>aptsConflict(trial,a));
+  const proposedSlot=conflict?nextFreeSlot({date,vet:vetName,dur,fromTime:time},customApts):null;
+
+  const submit=(e)=>{
+    e&&e.preventDefault&&e.preventDefault();
+    if(conflict){toast('Créneau déjà pris — choisissez un autre horaire','r');return;}
+    if(!animal){toast('Sélectionnez un patient','r');return;}
+    const meta=APT_TYPES.find(t=>t.v===type)||APT_TYPES[0];
+    const apt={
+      id:'apt-'+Date.now(),
+      t:time,date,dur:Number(dur),
+      nm:animal.nm,own:animal.owner,av:animal.av,
+      rsn:type,type,
+      vet:vetName,vetId:vet?.id,
+      st:meta.st,color:meta.color,
+      notes:notes.trim(),
+    };
+    addAppointment(apt);
+    addNotif&&addNotif({id:apt.id+'-created',type:'apt',title:'Nouveau RDV planifié',text:`${animal.nm} · ${type} · ${date} à ${time} · ${vetName}`,time:"À l'instant",unread:true});
+    setModal(null);
+    toast(`RDV créé : ${animal.nm} le ${date} à ${time}`,'tl');
+  };
+
+  return(<form onSubmit={submit}>
+    <div className="fg"><label className="fl">Patient</label>
+      <select className="fi fi-sel" value={animalId} onChange={e=>setAnimalId(Number(e.target.value))}>
+        {activeAnimals.map(a=><option key={a.id} value={a.id}>{Em[a.av]||'🐾'} {a.nm} — {a.owner}</option>)}
+      </select>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Date</label><input className="fi" type="date" value={date} onChange={e=>setDate(e.target.value)} required/></div>
+      <div className="fg"><label className="fl">Heure</label>
+        <select className="fi fi-sel" value={time} onChange={e=>setTime(e.target.value)}>
+          {APT_TIME_SLOTS.map(s=><option key={s}>{s}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Durée</label>
+        <select className="fi fi-sel" value={dur} onChange={e=>setDur(Number(e.target.value))}>
+          {APT_DURATIONS.map(d=><option key={d.v} value={d.v}>{d.l}</option>)}
+        </select>
+      </div>
+      <div className="fg"><label className="fl">Type</label>
+        <select className="fi fi-sel" value={type} onChange={e=>setType(e.target.value)}>
+          {APT_TYPES.map(t=><option key={t.v}>{t.v}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="fg"><label className="fl">Vétérinaire</label>
+      <select className="fi fi-sel" value={vetId} onChange={e=>setVetId(Number(e.target.value))}>
+        {vets.length===0?<option value={0}>Aucun vétérinaire</option>:vets.map(v=><option key={v.id} value={v.id}>{teamMemberFullName(v)}</option>)}
+      </select>
+    </div>
+    <div className="fg"><label className="fl">Notes <span style={{color:'var(--mg)',fontWeight:400,textTransform:'none',letterSpacing:0}}>(optionnel)</span></label>
+      <textarea className="fi" rows={2} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Motif détaillé, contexte..."/>
+    </div>
+    {conflict&&<div style={{padding:'10px 12px',background:'rgba(220,38,38,.08)',border:'1px solid rgba(220,38,38,.3)',borderRadius:10,marginBottom:10,fontSize:'.84rem',lineHeight:1.4}}>
+      <div style={{fontWeight:700,color:'#dc2626'}}>⚠️ Ce créneau est déjà pris</div>
+      <div style={{color:'var(--txt2)',marginTop:3}}>{conflict.nm} ({conflict.rsn}) avec {conflict.vet} à {conflict.t}.</div>
+      {proposedSlot&&<button type="button" className="btn btn-sm btn-t" style={{marginTop:8}} onClick={()=>setTime(proposedSlot)}>Choisir {proposedSlot} (libre)</button>}
+    </div>}
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+      <button type="submit" className="btn btn-t" disabled={!!conflict}><I.Cal/> Créer le RDV</button>
+    </div>
+  </form>);
+}
 
 function QuickActForm({animalId,defaultType}){
   const{addManualAct,teamMembers,toast,setModal}=useContext(Ctx);
@@ -2119,11 +2245,16 @@ function VaccineRemindersCard(){
 }
 
 function Dashboard(){
-  const{nav,setModal,toast,archive}=useContext(Ctx);
+  const{nav,setModal,toast,archive,customApts}=useContext(Ctx);
   const chartRef=useRef(null);const chartInst=useRef(null);
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
-  const activeApts=APTS.filter(a=>!archivedNames.has(a.nm));
+  const todayISO=new Date().toISOString().slice(0,10);
+  // Custom apts scheduled today come first, then static APTS as the mock "today" data.
+  const activeApts=useMemo(()=>{
+    const customToday=(customApts||[]).filter(a=>a.date===todayISO).sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
+    return[...customToday,...APTS].filter(a=>!archivedNames.has(a.nm));
+  },[customApts,archivedNames,todayISO]);
   useEffect(()=>{
     if(!chartRef.current)return;
     if(chartInst.current)chartInst.current.destroy();
@@ -2150,7 +2281,7 @@ function Dashboard(){
     </div>
 
     <div className="stats af1">
-      {[{ic:<I.Steth/>,v:'9',l:'Consultations',ch:'+15%',bg:'rgba(43,160,143,.08)',c:'var(--t)'},
+      {[{ic:<I.Steth/>,v:String(activeApts.length),l:'Consultations',ch:'+15%',bg:'rgba(43,160,143,.08)',c:'var(--t)'},
         {ic:<I.Syr/>,v:'2',l:'Opérations',ch:'+1',bg:'rgba(11,29,52,.05)',c:'var(--txt)'},
         {ic:<I.Warn/>,v:'1',l:'Urgence',ch:'',bg:'rgba(231,76,60,.08)',c:'#e74c3c'},
         {ic:<I.Euro/>,v:'1 245 €',l:"CA du jour",ch:'+18%',bg:'rgba(200,164,92,.08)',c:'var(--g)'}
@@ -2567,11 +2698,23 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
 
 // ===== SCHEDULE (WEEK VIEW) =====
 function Schedule(){
-  const{nav,setModal,archive}=useContext(Ctx);
+  const{nav,setModal,archive,customApts,removeAppointment,toast}=useContext(Ctx);
   const[view,setView]=useState('list');
   const[filter,setFilter]=useState('all');
   const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
-  const filtered=APTS.filter(a=>!archivedNames.has(a.nm)).filter(a=>filter==='all'||(filter==='martin'&&a.vet==='Dr. Martin')||(filter==='durand'&&a.vet==='Dr. Durand'));
+  // Merge: custom apts first (newest), then static APTS. All filtered by archive + vet.
+  const allApts=useMemo(()=>{
+    const c=[...(customApts||[])].sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
+    return[...c,...APTS];
+  },[customApts]);
+  const filtered=allApts.filter(a=>!archivedNames.has(a.nm)).filter(a=>filter==='all'||(filter==='martin'&&(a.vet||'').includes('Martin'))||(filter==='durand'&&(a.vet||'').includes('Durand')));
+  const handleDelete=(apt,e)=>{
+    e&&e.stopPropagation&&e.stopPropagation();
+    if(!apt._custom){toast('Ce RDV de démonstration ne peut pas être supprimé','r');return;}
+    if(!window.confirm(`Annuler le RDV de ${apt.nm} le ${apt.date} à ${apt.t} ?`)) return;
+    removeAppointment(apt.id);
+    toast(`RDV de ${apt.nm} annulé`,'tl');
+  };
   const days=['Lun 12','Mar 13','Mer 14','Jeu 15','Ven 16','Sam 17'];
   const hours=['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'];
   const evts=[
@@ -2597,14 +2740,22 @@ function Schedule(){
       <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouveau rendez-vous',type:'newApt'})}><I.Plus/> Nouveau RDV</button>
     </div>
     {view==='list'&&<div className="c af">
-      {filtered.map(a=>(
-        <div key={a.id} className="apt apt-bg" style={{marginBottom:4}} onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
+      {filtered.length===0&&<div style={{padding:30,textAlign:'center',color:'var(--txt2)',fontSize:'.86rem'}}>Aucun rendez-vous pour ce filtre.</div>}
+      {filtered.map(a=>{
+        const typeColor=a.color||(APT_TYPES.find(t=>t.v===a.rsn)?.color)||'var(--t)';
+        return(<div key={a.id} className="apt apt-bg" style={{marginBottom:4,borderLeft:`4px solid ${typeColor}`}} onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
           <div className="apt-time">{a.t}</div>
           <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
-          <div style={{flex:1,minWidth:0}}><div className="apt-nm">{a.nm} <span style={{fontWeight:400,color:'var(--txt2)',fontSize:'.78rem'}}>— {a.vet}</span></div><div className="apt-dt">{a.rsn} · {a.own} · {a.dur} min</div></div>
+          <div style={{flex:1,minWidth:0}}>
+            <div className="apt-nm">{a.nm} <span style={{fontWeight:400,color:'var(--txt2)',fontSize:'.78rem'}}>— {a.vet}</span>{a._custom&&<span style={{marginLeft:8,padding:'1px 7px',borderRadius:8,fontSize:'.62rem',fontWeight:700,background:'rgba(43,160,143,.12)',color:'var(--t)',textTransform:'uppercase',letterSpacing:'.04em'}}>Nouveau</span>}</div>
+            <div className="apt-dt">{a.rsn} · {a.own} · {a.dur} min{a._custom&&a.date?` · ${a.date}`:''}</div>
+          </div>
           <span className={`apt-st ${a.st}`}>{stL[a.st]}</span>
-        </div>
-      ))}
+          {a._custom&&<button onClick={e=>handleDelete(a,e)} title="Annuler ce RDV" style={{marginLeft:8,background:'transparent',border:'1px solid var(--lg)',color:'var(--txt2)',width:28,height:28,borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s'}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor='#dc2626';e.currentTarget.style.color='#dc2626';}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--lg)';e.currentTarget.style.color='var(--txt2)';}}><I.X/></button>}
+        </div>);
+      })}
     </div>}
     {view==='week'&&<div className="c af" style={{padding:0,overflow:'auto'}}>
       <div className="cal-week">
