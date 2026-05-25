@@ -2697,17 +2697,46 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
 }
 
 // ===== SCHEDULE (WEEK VIEW) =====
+// Date helpers shared by Schedule's three views.
+function dateISO(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate()).toISOString().slice(0,10);}
+function isSameDay(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();}
+function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
+function startOfWeek(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(0,0,0,0);return x;}
+function startOfMonth(d){return new Date(d.getFullYear(),d.getMonth(),1);}
+const FR_MONTHS=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+const FR_DAYS_SHORT=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+function fmtMonthYear(d){return `${FR_MONTHS[d.getMonth()].charAt(0).toUpperCase()+FR_MONTHS[d.getMonth()].slice(1)} ${d.getFullYear()}`;}
+function fmtDayLong(d){return d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}
+function fmtWeekRange(d){const a=startOfWeek(d);const b=addDays(a,6);return `${a.getDate()} ${FR_MONTHS[a.getMonth()].slice(0,4)} – ${b.getDate()} ${FR_MONTHS[b.getMonth()].slice(0,4)} ${b.getFullYear()}`;}
+// 6×7 matrix of dates starting on the Monday of the week containing day 1.
+function monthMatrix(d){
+  const first=startOfMonth(d);
+  const start=startOfWeek(first);
+  return Array.from({length:42},(_,i)=>addDays(start,i));
+}
+
 function Schedule(){
   const{nav,setModal,archive,customApts,removeAppointment,toast}=useContext(Ctx);
-  const[view,setView]=useState('list');
+  const[view,setView]=useState('week'); // 'day' | 'week' | 'month'
   const[filter,setFilter]=useState('all');
+  const[cursor,setCursor]=useState(()=>new Date());
+  const today=new Date();
+  const todayISO=dateISO(today);
   const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
-  // Merge: custom apts first (newest), then static APTS. All filtered by archive + vet.
-  const allApts=useMemo(()=>{
-    const c=[...(customApts||[])].sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
-    return[...c,...APTS];
-  },[customApts]);
-  const filtered=allApts.filter(a=>!archivedNames.has(a.nm)).filter(a=>filter==='all'||(filter==='martin'&&(a.vet||'').includes('Martin'))||(filter==='durand'&&(a.vet||'').includes('Durand')));
+
+  // Vet filter — applied uniformly across views
+  const matchesVet=(a)=>filter==='all'||(filter==='martin'&&(a.vet||'').includes('Martin'))||(filter==='durand'&&(a.vet||'').includes('Durand'));
+  // Static APTS are mock "today" data — surface them only on the real system today.
+  const aptsOn=useCallback((d)=>{
+    const iso=dateISO(d);
+    const customMatches=(customApts||[]).filter(a=>a.date===iso);
+    const staticMatches=isSameDay(d,today)?APTS:[];
+    return[...customMatches,...staticMatches]
+      .filter(a=>!archivedNames.has(a.nm))
+      .filter(matchesVet)
+      .sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
+  },[customApts,archivedNames,filter]);
+
   const handleDelete=(apt,e)=>{
     e&&e.stopPropagation&&e.stopPropagation();
     if(!apt._custom){toast('Ce RDV de démonstration ne peut pas être supprimé','r');return;}
@@ -2715,60 +2744,129 @@ function Schedule(){
     removeAppointment(apt.id);
     toast(`RDV de ${apt.nm} annulé`,'tl');
   };
-  const days=['Lun 12','Mar 13','Mer 14','Jeu 15','Ven 16','Sam 17'];
-  const hours=['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'];
-  const evts=[
-    {d:0,h:0,nm:'Rex',t:'Diabète',c:'teal'},{d:0,h:1,nm:'Mina',t:'Vaccination',c:'gold'},
-    {d:0,h:2,nm:'Coco',t:'Respiratoire',c:'teal'},{d:0,h:2.75,nm:'Nuage',t:'Dentaire',c:'teal'},
-    {d:0,h:3.5,nm:'Luna',t:'Thyroïde',c:'red'},{d:0,h:6,nm:'Rocky',t:'Post-op',c:'teal'},
-    {d:0,h:6.75,nm:'Bella',t:'Arthrose',c:'gold'},{d:0,h:7.5,nm:'Simba',t:'Cystite',c:'teal'},
-    {d:1,h:0,nm:'Félix',t:'Otite',c:'teal'},{d:1,h:1,nm:'Rex',t:'Écho',c:'red'},
-    {d:1,h:3,nm:'Mina',t:'Suivi',c:'gold'},{d:2,h:1,nm:'Luna',t:'Bilan',c:'red'},
-    {d:2,h:4,nm:'Bella',t:'Injection',c:'teal'},{d:3,h:0,nm:'Nuage',t:'Vaccin',c:'gold'},
-    {d:3,h:2,nm:'Rocky',t:'Contrôle',c:'teal'},{d:4,h:1,nm:'Rex',t:'Suivi',c:'teal'},
-    {d:4,h:3,nm:'Simba',t:'Contrôle',c:'gold'},{d:5,h:0,nm:'Coco',t:'Bilan',c:'teal'},
-  ];
+
+  // Navigation: shift by 1 day / 7 days / 1 month depending on view
+  const shift=(dir)=>{
+    setCursor(c=>{
+      if(view==='day') return addDays(c,dir);
+      if(view==='week') return addDays(c,dir*7);
+      // month: keep same day-of-month if possible, fall back to last day of new month
+      const x=new Date(c);
+      x.setDate(1);
+      x.setMonth(x.getMonth()+dir);
+      return x;
+    });
+  };
+
+  const cursorLabel=view==='day'?fmtDayLong(cursor):view==='week'?fmtWeekRange(cursor):fmtMonthYear(cursor);
+  const isOnToday=view==='day'?isSameDay(cursor,today)
+    :view==='week'?(isSameDay(cursor,today)||(cursor>=startOfWeek(today)&&cursor<=addDays(startOfWeek(today),6)))
+    :(cursor.getMonth()===today.getMonth()&&cursor.getFullYear()===today.getFullYear());
+
   return(<div>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
-      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+    {/* Toolbar: nav + view toggle + filter + new RDV */}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:10}}>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{display:'flex',alignItems:'center',gap:4,background:'var(--card)',border:'1px solid var(--lg)',borderRadius:10,padding:'2px 6px'}}>
+          <button className="btn btn-icon btn-ghost" style={{width:30,height:30}} onClick={()=>shift(-1)} aria-label="Précédent" title={view==='month'?'Mois précédent':view==='week'?'Semaine précédente':'Jour précédent'}>◀</button>
+          <div style={{minWidth:170,textAlign:'center',fontWeight:600,fontSize:'.86rem',color:'var(--txt)',padding:'0 4px',textTransform:'capitalize'}}>{cursorLabel}</div>
+          <button className="btn btn-icon btn-ghost" style={{width:30,height:30}} onClick={()=>shift(1)} aria-label="Suivant" title={view==='month'?'Mois suivant':view==='week'?'Semaine suivante':'Jour suivant'}>▶</button>
+        </div>
+        <button className={`btn btn-sm ${isOnToday?'btn-ghost':'btn-o'}`} disabled={isOnToday} onClick={()=>setCursor(new Date())} style={isOnToday?{opacity:.5,cursor:'default'}:undefined}>Aujourd'hui</button>
         <div className="tabs" style={{marginBottom:0,width:'auto'}}>
-          <button className={`tab ${view==='list'?'on':''}`} onClick={()=>setView('list')}>Liste</button>
+          <button className={`tab ${view==='day'?'on':''}`} onClick={()=>setView('day')}>Jour</button>
           <button className={`tab ${view==='week'?'on':''}`} onClick={()=>setView('week')}>Semaine</button>
+          <button className={`tab ${view==='month'?'on':''}`} onClick={()=>setView('month')}>Mois</button>
         </div>
         <select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Tous</option><option value="martin">Dr. Martin</option><option value="durand">Dr. Durand</option></select>
       </div>
-      <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouveau rendez-vous',type:'newApt'})}><I.Plus/> Nouveau RDV</button>
+      <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouveau rendez-vous',type:'newApt',prefill:{date:dateISO(cursor)}})}><I.Plus/> Nouveau RDV</button>
     </div>
-    {view==='list'&&<div className="c af">
-      {filtered.length===0&&<div style={{padding:30,textAlign:'center',color:'var(--txt2)',fontSize:'.86rem'}}>Aucun rendez-vous pour ce filtre.</div>}
-      {filtered.map(a=>{
+
+    {/* DAY VIEW */}
+    {view==='day'&&(()=>{const list=aptsOn(cursor);return(<div className="c af">
+      {list.length===0&&<div style={{padding:30,textAlign:'center',color:'var(--txt2)',fontSize:'.86rem'}}>Aucun rendez-vous ce jour.</div>}
+      {list.map(a=>{
         const typeColor=a.color||(APT_TYPES.find(t=>t.v===a.rsn)?.color)||'var(--t)';
         return(<div key={a.id} className="apt apt-bg" style={{marginBottom:4,borderLeft:`4px solid ${typeColor}`}} onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
           <div className="apt-time">{a.t}</div>
           <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
           <div style={{flex:1,minWidth:0}}>
             <div className="apt-nm">{a.nm} <span style={{fontWeight:400,color:'var(--txt2)',fontSize:'.78rem'}}>— {a.vet}</span>{a._custom&&<span style={{marginLeft:8,padding:'1px 7px',borderRadius:8,fontSize:'.62rem',fontWeight:700,background:'rgba(43,160,143,.12)',color:'var(--t)',textTransform:'uppercase',letterSpacing:'.04em'}}>Nouveau</span>}</div>
-            <div className="apt-dt">{a.rsn} · {a.own} · {a.dur} min{a._custom&&a.date?` · ${a.date}`:''}</div>
+            <div className="apt-dt">{a.rsn} · {a.own} · {a.dur} min</div>
           </div>
           <span className={`apt-st ${a.st}`}>{stL[a.st]}</span>
-          {a._custom&&<button onClick={e=>handleDelete(a,e)} title="Annuler ce RDV" style={{marginLeft:8,background:'transparent',border:'1px solid var(--lg)',color:'var(--txt2)',width:28,height:28,borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s'}}
-            onMouseEnter={e=>{e.currentTarget.style.borderColor='#dc2626';e.currentTarget.style.color='#dc2626';}}
-            onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--lg)';e.currentTarget.style.color='var(--txt2)';}}><I.X/></button>}
+          {a._custom&&<button onClick={e=>handleDelete(a,e)} title="Annuler ce RDV" style={{marginLeft:8,background:'transparent',border:'1px solid var(--lg)',color:'var(--txt2)',width:28,height:28,borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><I.X/></button>}
         </div>);
       })}
-    </div>}
-    {view==='week'&&<div className="c af" style={{padding:0,overflow:'auto'}}>
-      <div className="cal-week">
-        <div className="cal-hdr" style={{background:'var(--bg)'}}></div>
-        {days.map((d,i)=><div key={i} className={`cal-hdr ${i===0?'today':''}`}>{d}</div>)}
-        {hours.map((h,hi)=><React.Fragment key={hi}>
-          <div className="cal-time">{h}</div>
-          {days.map((d,di)=><div key={di} className="cal-cell">
-            {evts.filter(e=>e.d===di&&Math.floor(e.h)===hi).map((e,ei)=><div key={ei} className={`cal-evt ${e.c}`}>{e.nm}<br/>{e.t}</div>)}
-          </div>)}
-        </React.Fragment>)}
-      </div>
-    </div>}
+    </div>);})()}
+
+    {/* WEEK VIEW */}
+    {view==='week'&&(()=>{
+      const weekStart=startOfWeek(cursor);
+      const weekDays=Array.from({length:7},(_,i)=>addDays(weekStart,i));
+      const hours=Array.from({length:11},(_,i)=>`${String(8+i).padStart(2,'0')}:00`);
+      return(<div className="c af" style={{padding:0,overflow:'auto'}}>
+        <div className="cal-week">
+          <div className="cal-hdr" style={{background:'var(--bg)'}}></div>
+          {weekDays.map((d,i)=>{
+            const isToday=isSameDay(d,today);
+            return(<div key={i} className={`cal-hdr ${isToday?'today':''}`} style={{cursor:'pointer'}} onClick={()=>{setCursor(d);setView('day');}}>
+              {FR_DAYS_SHORT[i]} {d.getDate()}
+            </div>);
+          })}
+          {hours.map((h,hi)=><React.Fragment key={hi}>
+            <div className="cal-time">{h}</div>
+            {weekDays.map((d,di)=>{
+              const dayApts=aptsOn(d).filter(a=>{const mm=timeToMin(a.t);return mm>=(8+hi)*60&&mm<(8+hi+1)*60;});
+              return(<div key={di} className="cal-cell">
+                {dayApts.map((a,ei)=>{
+                  const c=a.color||(APT_TYPES.find(t=>t.v===a.rsn)?.color)||'#2BA08F';
+                  return(<div key={ei} className="cal-evt" style={{background:c+'22',borderLeft:`3px solid ${c}`,color:'var(--txt)'}} onClick={(e)=>{e.stopPropagation();const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}} title={`${a.t} · ${a.nm} · ${a.rsn}`}>{a.t} {a.nm}<br/><span style={{fontSize:'.62rem',opacity:.75}}>{a.rsn}</span></div>);
+                })}
+              </div>);
+            })}
+          </React.Fragment>)}
+        </div>
+      </div>);
+    })()}
+
+    {/* MONTH VIEW */}
+    {view==='month'&&(()=>{
+      const cells=monthMatrix(cursor);
+      const month=cursor.getMonth();
+      return(<div className="c af" style={{padding:14}}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:6,marginBottom:8}}>
+          {FR_DAYS_SHORT.map(d=>(<div key={d} style={{textAlign:'center',fontSize:'.7rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',padding:'4px 0'}}>{d}</div>))}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:6}}>
+          {cells.map((d,i)=>{
+            const inMonth=d.getMonth()===month;
+            const isToday=isSameDay(d,today);
+            const dayApts=aptsOn(d);
+            return(<div key={i} onClick={()=>{setCursor(d);setView('day');}}
+              style={{minHeight:80,padding:'6px 8px',background:isToday?'rgba(43,160,143,.08)':inMonth?'var(--card)':'var(--bg)',border:`1px solid ${isToday?'var(--t)':'var(--lg)'}`,borderRadius:8,cursor:'pointer',opacity:inMonth?1:.5,display:'flex',flexDirection:'column',gap:4,transition:'all .15s'}}
+              onMouseEnter={e=>{if(inMonth)e.currentTarget.style.borderColor='var(--t)';}}
+              onMouseLeave={e=>{if(!isToday)e.currentTarget.style.borderColor='var(--lg)';}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:'.82rem',fontWeight:isToday?700:500,color:isToday?'var(--t)':inMonth?'var(--txt)':'var(--mg)'}}>{d.getDate()}</span>
+                {dayApts.length>0&&<span style={{fontSize:'.66rem',fontWeight:700,background:'var(--t)',color:'#fff',padding:'1px 6px',borderRadius:8}}>{dayApts.length}</span>}
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:2,flex:1,overflow:'hidden'}}>
+                {dayApts.slice(0,3).map((a,j)=>{
+                  const c=a.color||(APT_TYPES.find(t=>t.v===a.rsn)?.color)||'#2BA08F';
+                  return(<div key={j} style={{display:'flex',gap:4,alignItems:'center',fontSize:'.66rem',color:'var(--txt2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    <span style={{width:6,height:6,borderRadius:'50%',background:c,flexShrink:0}}/>
+                    <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{a.t} {a.nm}</span>
+                  </div>);
+                })}
+                {dayApts.length>3&&<div style={{fontSize:'.62rem',color:'var(--mg)',fontStyle:'italic'}}>+ {dayApts.length-3}</div>}
+              </div>
+            </div>);
+          })}
+        </div>
+      </div>);
+    })()}
   </div>);
 }
 
