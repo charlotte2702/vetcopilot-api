@@ -1081,12 +1081,23 @@ function UserAvatar({member,size=36,editable=false,online=false,onChange}){
 function LoginPage({onLogin}){
   const{switchUser,toast,teamMembers}=useContext(Ctx);
   const[loadingId,setLoadingId]=useState(null);
+  const[email,setEmail]=useState('');
+  const[pw,setPw]=useState('');
+  const[showPw,setShowPw]=useState(false);
+  const[formLoading,setFormLoading]=useState(false);
+  const busy=!!loadingId||formLoading;
   const quickLogin=(member)=>{
-    if(loadingId) return;
+    if(busy) return;
     setLoadingId(member.id);
     switchUser(member.id);
     toast(`Bienvenue ${teamMemberFullName(member)}`,'tl');
     setTimeout(()=>{setLoadingId(null);onLogin();},600);
+  };
+  const handleLogin=(e)=>{
+    e.preventDefault();
+    if(busy) return;
+    setFormLoading(true);
+    setTimeout(()=>{setFormLoading(false);onLogin();},900);
   };
   return(
     <div style={{
@@ -1126,14 +1137,14 @@ function LoginPage({onLogin}){
             return(<div key={m.id} role="button" tabIndex={0}
               onClick={()=>quickLogin(m)}
               onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();quickLogin(m);}}}
-              onMouseEnter={e=>{if(!loadingId){e.currentTarget.style.background='rgba(255,255,255,.06)';e.currentTarget.style.borderColor='rgba(43,160,143,.5)';}}}
+              onMouseEnter={e=>{if(!busy){e.currentTarget.style.background='rgba(255,255,255,.06)';e.currentTarget.style.borderColor='rgba(43,160,143,.5)';}}}
               onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.borderColor='rgba(255,255,255,.06)';}}
               style={{
                 display:'flex',alignItems:'center',gap:12,
                 padding:'12px 14px',borderRadius:12,
                 background:'transparent',border:'1px solid rgba(255,255,255,.06)',
-                cursor:loadingId?'wait':'pointer',transition:'all .15s',
-                opacity:loadingId&&!loading?.4:1,
+                cursor:busy?'wait':'pointer',transition:'all .15s',
+                opacity:busy&&!loading?.4:1,
               }}>
               <div onClick={e=>e.stopPropagation()}><UserAvatar member={m} size={40} editable/></div>
               <div style={{flex:1,minWidth:0}}>
@@ -1145,6 +1156,57 @@ function LoginPage({onLogin}){
                 : <span style={{color:'rgba(255,255,255,.3)',flexShrink:0,fontSize:'1.1rem',lineHeight:1}}>›</span>}
             </div>);
           })}
+        </div>
+
+        {/* Separator */}
+        <div style={{display:'flex',alignItems:'center',gap:12,margin:'22px 0 18px'}}>
+          <div style={{flex:1,height:1,background:'rgba(255,255,255,.08)'}}/>
+          <div style={{fontSize:'.66rem',color:'rgba(255,255,255,.4)',textTransform:'uppercase',letterSpacing:'.1em',whiteSpace:'nowrap'}}>ou connectez-vous</div>
+          <div style={{flex:1,height:1,background:'rgba(255,255,255,.08)'}}/>
+        </div>
+
+        {/* Email + password form */}
+        <form onSubmit={handleLogin}>
+          <div style={{marginBottom:12}}>
+            <div style={{position:'relative'}}>
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Adresse email" autoComplete="email"
+                style={{width:'100%',padding:'12px 14px 12px 40px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)',borderRadius:10,color:'#fff',fontSize:'.88rem',outline:'none',transition:'border-color .15s,background .15s',fontFamily:'inherit',boxSizing:'border-box'}}
+                onFocus={e=>{e.target.style.borderColor='rgba(43,160,143,.5)';e.target.style.background='rgba(255,255,255,.05)';}}
+                onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,.1)';e.target.style.background='rgba(255,255,255,.03)';}}/>
+              <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',color:'rgba(255,255,255,.4)',pointerEvents:'none',display:'flex'}}><I.Mail/></span>
+            </div>
+          </div>
+          <div style={{marginBottom:14}}>
+            <div style={{position:'relative'}}>
+              <input type={showPw?'text':'password'} value={pw} onChange={e=>setPw(e.target.value)} placeholder="Mot de passe" autoComplete="current-password"
+                style={{width:'100%',padding:'12px 40px 12px 40px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)',borderRadius:10,color:'#fff',fontSize:'.88rem',outline:'none',transition:'border-color .15s,background .15s',fontFamily:'inherit',boxSizing:'border-box'}}
+                onFocus={e=>{e.target.style.borderColor='rgba(43,160,143,.5)';e.target.style.background='rgba(255,255,255,.05)';}}
+                onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,.1)';e.target.style.background='rgba(255,255,255,.03)';}}/>
+              <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',color:'rgba(255,255,255,.4)',pointerEvents:'none',display:'flex'}}><I.Lock/></span>
+              <button type="button" onClick={()=>setShowPw(!showPw)} aria-label={showPw?'Masquer le mot de passe':'Afficher le mot de passe'}
+                style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'rgba(255,255,255,.4)',cursor:'pointer',padding:4,display:'flex'}}><I.Eye/></button>
+            </div>
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <label style={{display:'flex',alignItems:'center',gap:7,fontSize:'.78rem',color:'rgba(255,255,255,.6)',cursor:'pointer',userSelect:'none'}}>
+              <input type="checkbox" defaultChecked style={{accentColor:'var(--t)',cursor:'pointer'}}/>
+              Se souvenir
+            </label>
+            <a href="#" onClick={e=>{e.preventDefault();toast('Lien de réinitialisation envoyé (mock)','info');}}
+              style={{fontSize:'.78rem',color:'var(--t)',fontWeight:500,textDecoration:'none'}}>Mot de passe oublié ?</a>
+          </div>
+          <button type="submit" disabled={busy}
+            style={{width:'100%',padding:'13px 16px',borderRadius:10,border:'none',background:busy?'rgba(43,160,143,.4)':'linear-gradient(135deg,#2BA08F 0%,#1f857a 100%)',color:'#fff',fontSize:'.92rem',fontWeight:600,cursor:busy?'wait':'pointer',transition:'transform .1s,box-shadow .15s',boxShadow:busy?'none':'0 4px 14px rgba(43,160,143,.35)',display:'flex',alignItems:'center',justifyContent:'center',gap:8,fontFamily:'inherit'}}
+            onMouseEnter={e=>{if(!busy)e.currentTarget.style.transform='translateY(-1px)';}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';}}>
+            {formLoading
+              ? <><div style={{width:14,height:14,border:'2px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/> Connexion...</>
+              : 'Se connecter'}
+          </button>
+        </form>
+
+        <div style={{textAlign:'center',marginTop:18,fontSize:'.78rem',color:'rgba(255,255,255,.5)'}}>
+          Pas encore de compte ? <a href="#" onClick={e=>{e.preventDefault();toast('Demande d\'accès enregistrée (mock)','info');}} style={{color:'var(--t)',fontWeight:600,textDecoration:'none'}}>Demander un accès</a>
         </div>
       </div>
 
