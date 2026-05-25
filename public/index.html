@@ -3618,23 +3618,201 @@ function Subscription(){
 }
 
 // ===== STATS =====
-function Stats(){
-  const barRef=useRef(null);const dRef=useRef(null);const lineRef=useRef(null);const bI=useRef(null);const dI=useRef(null);const lI=useRef(null);
-  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  useEffect(()=>{
-    const txtC=isDark?'#6B7B8D':'#8C98A6';const gridC=isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.03)';
-    if(barRef.current){bI.current?.destroy();bI.current=new Chart(barRef.current,{type:'bar',data:{labels:['Lun','Mar','Mer','Jeu','Ven','Sam'],datasets:[{label:'Consultations',data:[8,12,6,10,14,4],backgroundColor:'rgba(43,160,143,.65)',borderRadius:6},{label:'Opérations',data:[2,1,3,1,2,0],backgroundColor:'rgba(200,164,92,.65)',borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{family:'Inter',size:11},color:txtC,usePointStyle:true,pointStyle:'rectRounded'}}},scales:{y:{grid:{color:gridC},beginAtZero:true,ticks:{color:txtC}},x:{grid:{display:false},ticks:{color:txtC}}}}});}
-    if(dRef.current){dI.current?.destroy();dI.current=new Chart(dRef.current,{type:'doughnut',data:{labels:['Chiens','Chats','Oiseaux','Lapins','Autres'],datasets:[{data:[42,31,8,12,7],backgroundColor:['#2BA08F','#C8A45C','#E74C3C','#3498db','#8C98A6'],borderWidth:0,spacing:3}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{position:'bottom',labels:{font:{family:'Inter',size:11},color:txtC,usePointStyle:true,pointStyle:'circle',padding:14}}}}});}
-    if(lineRef.current){lI.current?.destroy();lI.current=new Chart(lineRef.current,{type:'line',data:{labels:['Jan','Fév','Mar','Avr','Mai'],datasets:[{label:'CA (k€)',data:[9.2,11.5,10.8,12.1,12.4],borderColor:'#2BA08F',backgroundColor:'rgba(43,160,143,.06)',fill:true,tension:.4,pointRadius:5,borderWidth:2.5,pointBackgroundColor:'#2BA08F',pointBorderColor:isDark?'#161B22':'#fff',pointBorderWidth:2},{label:'Objectif',data:[10,10,10,10,10],borderColor:'#C8A45C',borderDash:[6,4],borderWidth:1.5,pointRadius:0,fill:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{family:'Inter',size:11},color:txtC,usePointStyle:true}}},scales:{y:{grid:{color:gridC},ticks:{color:txtC,callback:v=>v+'k€'}},x:{grid:{display:false},ticks:{color:txtC}}}}});}
-    return()=>{bI.current?.destroy();dI.current?.destroy();lI.current?.destroy();};
-  },[isDark]);
-  return(<div>
-    <div className="stats af">{[{v:'54',l:'Consultations/sem.',ch:'+12%'},{v:'9',l:'Opérations',ch:'+3'},{v:'12 450 €',l:"CA hebdo",ch:'+8%'},{v:'96%',l:'Satisfaction',ch:'+2%'}].map((s,i)=><div key={i} className="c stat"><div><div className="stat-v">{s.v}</div><div className="stat-l">{s.l}</div><div className="stat-ch" style={{color:'var(--t)'}}><I.ArrowUp/>{s.ch}</div></div></div>)}</div>
-    <div className="g2 af1" style={{marginBottom:18}}>
-      <div className="c"><div className="c-title">Activité hebdomadaire</div><div style={{height:260,marginTop:10}}><canvas ref={barRef}/></div></div>
-      <div className="c"><div className="c-title">Répartition par espèce</div><div style={{height:260,marginTop:10}}><canvas ref={dRef}/></div></div>
+// ---- Stats mock data (period-aware) ----
+// One block per period filter. The headline numbers + trends change when the
+// user clicks a pill; the charts stay anchored on "month" granularity since
+// the spec is explicitly written for the monthly view.
+const STATS_PERIODS={
+  today: {label:"Aujourd'hui", consultations:8,   fillRate:92, revenue:540,   newPatients:1,  tConsult:'+2',   tFill:'+5%', tRev:'+8%',  tNew:'+1'},
+  week:  {label:'Semaine',     consultations:32,  fillRate:84, revenue:3150,  newPatients:4,  tConsult:'+11%', tFill:'+3%', tRev:'+6%',  tNew:'+2'},
+  month: {label:'Mois',        consultations:127, fillRate:78, revenue:12450, newPatients:14, tConsult:'+12%', tFill:'+4%', tRev:'+9%',  tNew:'+3'},
+  year:  {label:'Année',       consultations:1483,fillRate:81, revenue:148200,newPatients:182,tConsult:'+18%', tFill:'+6%', tRev:'+14%', tNew:'+22'},
+};
+// 28 daily points (4 weeks). Mock: weekday-heavy curve, weekend dip.
+const WEEKLY_ACTIVITY_LABELS=Array.from({length:28},(_,i)=>{
+  const dt=new Date();dt.setDate(dt.getDate()-27+i);
+  return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+});
+const WEEKLY_CONSULTATIONS=[6,9,7,8,11,3,2, 5,8,10,9,12,4,1, 7,11,9,10,13,5,2, 8,12,10,11,14,4,3];
+const WEEKLY_OPERATIONS  =[1,2,1,3,2,0,0, 2,1,2,1,3,1,0, 1,3,2,2,3,0,0, 2,2,3,2,4,1,0];
+const ACT_TYPES=[
+  {l:'Consultations classiques',v:45,c:'#2BA08F'},
+  {l:'Vaccinations',            v:20,c:'#C8A45C'},
+  {l:'Chirurgies',              v:15,c:'#9b59b6'},
+  {l:'Urgences',                v:10,c:'#e74c3c'},
+  {l:'Autres',                  v:10,c:'#8C98A6'},
+];
+const REVENUE_WEEKS=[
+  {l:'Sem. 1',v:2810},
+  {l:'Sem. 2',v:3120},
+  {l:'Sem. 3',v:2960},
+  {l:'Sem. 4',v:3560},
+];
+const TOP_PATIENTS=[
+  {nm:'Rex',  sp:'Chien',     av:'dog',    visits:5,reason:'Contrôle diabète'},
+  {nm:'Mina', sp:'Chat',      av:'cat',    visits:4,reason:'Vaccination leucose'},
+  {nm:'Luna', sp:'Chat',      av:'cat',    visits:4,reason:'Bilan thyroïdien'},
+  {nm:'Coco', sp:'Perroquet', av:'bird',   visits:3,reason:'Contrôle respiratoire'},
+  {nm:'Nuage',sp:'Lapin',     av:'rabbit', visits:3,reason:'Vérification dentaire'},
+];
+const VET_BREAKDOWN=[
+  {nm:'Dr. Martin',visits:65,color:'#2BA08F'},
+  {nm:'Dr. Durand',visits:48,color:'#C8A45C'},
+];
+
+function StatCard({ic,label,value,trend,color}){
+  const positive=trend&&!trend.startsWith('-')&&!trend.startsWith('0');
+  return(<div className="c stat"><div style={{display:'flex',alignItems:'center',gap:12,width:'100%'}}>
+    <div style={{width:42,height:42,borderRadius:11,background:`${color}1a`,color,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.25rem',flexShrink:0}}>{ic}</div>
+    <div style={{flex:1,minWidth:0}}>
+      <div className="stat-v" style={{color:'var(--txt)'}}>{value}</div>
+      <div className="stat-l">{label}</div>
+      {trend&&<div className="stat-ch" style={{color:positive?'#16a34a':'var(--txt2)',display:'inline-flex',alignItems:'center',gap:3,marginTop:3,fontSize:'.74rem'}}>{positive&&<I.ArrowUp/>}{trend} vs mois dernier</div>}
     </div>
-    <div className="c af2"><div className="c-title">Évolution du chiffre d'affaires</div><div style={{height:260,marginTop:10}}><canvas ref={lineRef}/></div></div>
+  </div></div>);
+}
+
+function Stats(){
+  const lineRef=useRef(null);const donutRef=useRef(null);const barRef=useRef(null);
+  const lineInst=useRef(null);const donutInst=useRef(null);const barInst=useRef(null);
+  const[period,setPeriod]=useState('month');
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const data=STATS_PERIODS[period];
+
+  useEffect(()=>{
+    const txtC=isDark?'#6B7B8D':'#8C98A6';
+    const gridC=isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.04)';
+    const pointBorder=isDark?'#161B22':'#fff';
+
+    // Line: consultations + opérations sur 28 jours
+    if(lineRef.current){
+      lineInst.current?.destroy();
+      lineInst.current=new Chart(lineRef.current,{
+        type:'line',
+        data:{labels:WEEKLY_ACTIVITY_LABELS,datasets:[
+          {label:'Consultations',data:WEEKLY_CONSULTATIONS,borderColor:'#2BA08F',backgroundColor:'rgba(43,160,143,.1)',fill:true,tension:.35,pointRadius:3,pointBackgroundColor:'#2BA08F',pointBorderColor:pointBorder,pointBorderWidth:1.5,borderWidth:2.2},
+          {label:'Opérations',  data:WEEKLY_OPERATIONS,  borderColor:'#C8A45C',backgroundColor:'rgba(200,164,92,.08)',fill:true,tension:.35,pointRadius:3,pointBackgroundColor:'#C8A45C',pointBorderColor:pointBorder,pointBorderWidth:1.5,borderWidth:2.2},
+        ]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{family:'Inter',size:11},color:txtC,usePointStyle:true,padding:14}}},scales:{y:{grid:{color:gridC},beginAtZero:true,ticks:{color:txtC,precision:0}},x:{grid:{display:false},ticks:{color:txtC,maxRotation:0,autoSkip:true,maxTicksLimit:8}}}}
+      });
+    }
+
+    // Donut: répartition par type d'acte
+    if(donutRef.current){
+      donutInst.current?.destroy();
+      donutInst.current=new Chart(donutRef.current,{
+        type:'doughnut',
+        data:{labels:ACT_TYPES.map(a=>a.l),datasets:[{data:ACT_TYPES.map(a=>a.v),backgroundColor:ACT_TYPES.map(a=>a.c),borderWidth:0,spacing:3}]},
+        options:{responsive:true,maintainAspectRatio:false,cutout:'66%',plugins:{legend:{position:'bottom',labels:{font:{family:'Inter',size:11},color:txtC,usePointStyle:true,pointStyle:'circle',padding:12,boxWidth:8}},tooltip:{callbacks:{label:c=>`${c.label}: ${c.parsed}%`}}}}
+      });
+    }
+
+    // Bar: CA par semaine
+    if(barRef.current){
+      barInst.current?.destroy();
+      const max=Math.max(...REVENUE_WEEKS.map(w=>w.v));
+      barInst.current=new Chart(barRef.current,{
+        type:'bar',
+        data:{labels:REVENUE_WEEKS.map(w=>w.l),datasets:[{label:'CA (€)',data:REVENUE_WEEKS.map(w=>w.v),backgroundColor:'rgba(43,160,143,.7)',borderRadius:8,maxBarThickness:54}]},
+        options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:24}},plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.parsed.y.toLocaleString('fr-FR')} €`}}},scales:{y:{grid:{color:gridC},beginAtZero:true,suggestedMax:max*1.18,ticks:{color:txtC,callback:v=>(v/1000).toFixed(1)+' k€'}},x:{grid:{display:false},ticks:{color:txtC}}}},
+        plugins:[{
+          id:'valueLabels',
+          afterDatasetsDraw(chart){
+            const{ctx,scales:{x,y}}=chart;
+            const ds=chart.data.datasets[0].data;
+            ctx.save();ctx.font='600 11px Inter';ctx.fillStyle=txtC;ctx.textAlign='center';
+            ds.forEach((v,i)=>{ctx.fillText(v.toLocaleString('fr-FR')+' €',x.getPixelForValue(i),y.getPixelForValue(v)-8);});
+            ctx.restore();
+          }
+        }]
+      });
+    }
+
+    return()=>{lineInst.current?.destroy();donutInst.current?.destroy();barInst.current?.destroy();};
+  },[isDark]);
+
+  const fmtEur=(n)=>n.toLocaleString('fr-FR')+' €';
+
+  return(<div>
+    {/* PERIOD FILTER */}
+    <div className="tabs af" style={{marginBottom:14,maxWidth:420}}>
+      {Object.entries(STATS_PERIODS).map(([k,v])=>(
+        <button key={k} className={`tab ${period===k?'on':''}`} onClick={()=>setPeriod(k)}>{v.label}</button>
+      ))}
+    </div>
+
+    {/* STAT CARDS */}
+    <div className="stats af1" style={{gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))'}}>
+      <StatCard ic="🩺" color="#2BA08F" label={`Consultations · ${data.label.toLowerCase()}`} value={data.consultations.toLocaleString('fr-FR')} trend={data.tConsult}/>
+      <StatCard ic="📅" color="#C8A45C" label="Taux de remplissage agenda"                   value={`${data.fillRate}%`}                                 trend={data.tFill}/>
+      <StatCard ic="💶" color="#9b59b6" label={`CA · ${data.label.toLowerCase()}`}            value={fmtEur(data.revenue)}                                trend={data.tRev}/>
+      <StatCard ic="🐾" color="#3498db" label="Nouveaux patients"                             value={data.newPatients.toLocaleString('fr-FR')}            trend={data.tNew}/>
+    </div>
+
+    {/* WEEKLY ACTIVITY (line) */}
+    <div className="c af2" style={{marginTop:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}}>
+        <div className="c-title">Activité hebdomadaire — 4 dernières semaines</div>
+        <div style={{fontSize:'.74rem',color:'var(--txt2)'}}>Consultations + opérations · jour par jour</div>
+      </div>
+      <div style={{position:'relative',height:240}}><canvas ref={lineRef}/></div>
+    </div>
+
+    {/* DONUT + BAR (side by side) */}
+    <div className="g2 af1" style={{marginTop:16}}>
+      <div className="c">
+        <div className="c-title" style={{marginBottom:10}}>Répartition par type d'acte</div>
+        <div style={{position:'relative',height:260}}><canvas ref={donutRef}/></div>
+      </div>
+      <div className="c">
+        <div className="c-title" style={{marginBottom:10}}>CA hebdomadaire — mois en cours</div>
+        <div style={{position:'relative',height:260}}><canvas ref={barRef}/></div>
+      </div>
+    </div>
+
+    {/* TOP PATIENTS + VETS */}
+    <div className="g2 af2" style={{marginTop:16}}>
+      <div className="c">
+        <div className="c-title" style={{marginBottom:14}}>Top patients ce mois</div>
+        {TOP_PATIENTS.map((p,i)=>(
+          <div key={i} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:i<TOP_PATIENTS.length-1?'1px solid var(--bg)':'none'}}>
+            <div style={{width:28,height:28,borderRadius:'50%',background:'rgba(43,160,143,.1)',color:'var(--t)',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--fh)',fontWeight:700,fontSize:'.8rem',flexShrink:0}}>{i+1}</div>
+            <div className={`apt-av ${p.av}`} style={{width:36,height:36,borderRadius:10,fontSize:'1rem'}}>{Em[p.av]||'🐾'}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,color:'var(--txt)',fontSize:'.88rem'}}>{p.nm} <span style={{color:'var(--txt2)',fontWeight:400,fontSize:'.78rem'}}>· {p.sp}</span></div>
+              <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>Dernier motif : {p.reason}</div>
+            </div>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontFamily:'var(--fh)',fontWeight:700,color:'var(--t)',fontSize:'1.05rem'}}>{p.visits}</div>
+              <div style={{fontSize:'.68rem',color:'var(--txt2)'}}>visite{p.visits>1?'s':''}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="c">
+        <div className="c-title" style={{marginBottom:14}}>Répartition par vétérinaire</div>
+        {(()=>{
+          const total=VET_BREAKDOWN.reduce((s,v)=>s+v.visits,0);
+          const max=Math.max(...VET_BREAKDOWN.map(v=>v.visits));
+          return VET_BREAKDOWN.map((v,i)=>{
+            const pct=Math.round((v.visits/total)*100);
+            const barW=Math.round((v.visits/max)*100);
+            return(<div key={i} style={{marginBottom:i<VET_BREAKDOWN.length-1?14:0}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}}>
+                <div style={{fontSize:'.88rem',fontWeight:600,color:'var(--txt)'}}>{v.nm}</div>
+                <div style={{fontSize:'.82rem',color:'var(--txt2)'}}><strong style={{color:'var(--txt)'}}>{v.visits}</strong> consultations <span style={{color:'var(--mg)'}}>· {pct}%</span></div>
+              </div>
+              <div style={{height:10,background:'var(--bg)',borderRadius:5,overflow:'hidden'}}>
+                <div style={{height:'100%',width:`${barW}%`,background:`linear-gradient(90deg,${v.color},${v.color}cc)`,borderRadius:5,transition:'width .35s'}}/>
+              </div>
+            </div>);
+          });
+        })()}
+        <div style={{marginTop:20,padding:'12px 14px',background:'var(--bg)',borderRadius:10,fontSize:'.78rem',color:'var(--txt2)'}}>
+          <strong style={{color:'var(--txt)'}}>{VET_BREAKDOWN.reduce((s,v)=>s+v.visits,0)}</strong> consultations au total · {VET_BREAKDOWN.length} vétérinaires actifs
+        </div>
+      </div>
+    </div>
   </div>);
 }
 
