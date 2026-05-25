@@ -891,6 +891,10 @@ function App(){
     });
   },[]);
 
+  // Voice-capture panel toggle. Owned by App so the fab + panel + future
+  // global shortcuts can all read it from Ctx.
+  const[voiceOpen,setVoiceOpen]=useState(false);
+
   // Manual acts overlay: { [animalId]: [act, ...] }. Vet records quick acts
   // (vaccination, weighing, etc.) without going through the full SOAP/IA flow.
   // Persisted in localStorage so refreshes don't lose them.
@@ -1049,7 +1053,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />
       ) : (
@@ -1075,6 +1079,7 @@ function App(){
           </main>
           {!IS_EMBED&&<MobileNav/>}
           {!IS_EMBED&&<Chatbot/>}
+          {!IS_EMBED&&<VoiceCapture/>}
           {!IS_EMBED&&<NotifPanel/>}
           {!IS_EMBED&&<ChatWidget/>}
           {modal&&<Modal/>}
@@ -4060,6 +4065,208 @@ function Settings(){
 }
 
 // ===== CHATBOT =====
+// Normalize a name for fuzzy comparison (lowercase + strip diacritics).
+function normNm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+
+// ===== VOICE CAPTURE (saisie vocale intelligente) =====
+const VOICE_ACT_LABEL={vaccination:'Vaccination',consultation:'Consultation',vermifuge:'Vermifuge',detartrage:'Détartrage',controle:'Contrôle',chirurgie:'Chirurgie',urgence:'Urgence',autre:'Autre'};
+
+function VoiceCapture(){
+  const{voiceOpen,setVoiceOpen,toast,addManualAct,archive}=useContext(Ctx);
+  const[transcript,setTranscript]=useState('');
+  const[parsed,setParsed]=useState(null);
+  const[selectedAnimalId,setSelectedAnimalId]=useState(null);
+  const[step,setStep]=useState('idle'); // idle | recording | sending | parsed
+  const[editing,setEditing]=useState(false);
+  const dict=useDictation();
+
+  const activeAnimals=useMemo(()=>ANIMALS.filter(a=>!(archive||{})[a.id]),[archive]);
+
+  const findAnimal=useCallback((name)=>{
+    if(!name) return null;
+    const n=normNm(name);
+    return activeAnimals.find(a=>normNm(a.nm)===n)||null;
+  },[activeAnimals]);
+
+  // When no exact match, surface up to 3 candidates ranked by name overlap.
+  const candidates=useMemo(()=>{
+    if(!parsed||!parsed.animalName||selectedAnimalId) return [];
+    const n=normNm(parsed.animalName);
+    return activeAnimals
+      .map(a=>{const an=normNm(a.nm);let score=0;if(an===n)score=100;else if(an.startsWith(n.slice(0,3)))score=50;else if(an.includes(n)||n.includes(an))score=30;else if(an[0]===n[0])score=10;return{a,score};})
+      .filter(x=>x.score>0)
+      .sort((x,y)=>y.score-x.score)
+      .slice(0,3)
+      .map(x=>x.a);
+  },[parsed,selectedAnimalId,activeAnimals]);
+
+  const reset=useCallback(()=>{
+    setTranscript('');setParsed(null);setSelectedAnimalId(null);setStep('idle');setEditing(false);
+    if(dict.recording) dict.stop();
+  },[dict]);
+
+  const startMic=()=>{
+    if(step==='sending') return;
+    if(!dict.supported){toast("Reconnaissance vocale non supportée — utilisez Chrome, Edge ou Safari récents.",'r');return;}
+    setTranscript('');setParsed(null);setSelectedAnimalId(null);setStep('recording');
+    dict.start({onUpdate:setTranscript,onError:(m)=>{toast(m,'r');setStep('idle');}});
+  };
+
+  const parseTranscript=async(text)=>{
+    if(!text||!text.trim()){toast('Aucun texte à analyser','r');return;}
+    setStep('sending');
+    try{
+      const r=await fetch('/api/voice-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+      const d=await r.json();
+      if(!d.ok) throw new Error(d.error||'Erreur IA');
+      setParsed(d.parsed||{});
+      const matched=findAnimal((d.parsed||{}).animalName);
+      setSelectedAnimalId(matched?matched.id:null);
+      setStep('parsed');
+    }catch(e){toast('Erreur IA : '+(e.message||e),'r');setStep('idle');}
+  };
+
+  const stopMic=()=>{
+    dict.stop();
+    setTimeout(()=>{parseTranscript(transcript);},120); // let final transcript flush
+  };
+
+  const validate=()=>{
+    if(!parsed||!selectedAnimalId){toast('Sélectionnez un patient avant de valider','r');return;}
+    const animal=activeAnimals.find(a=>a.id===selectedAnimalId);
+    if(!animal) return;
+    const dateISO=parsed.date||new Date().toISOString().slice(0,10);
+    const act={
+      date:dateISO,
+      dateDisplay:formatDateFR(dateISO),
+      type:VOICE_ACT_LABEL[parsed.actType]||'Autre',
+      vet:parsed.vetName||'Dr. Jean Martin',
+      notes:parsed.notes||'',
+      ...(parsed.weight?{weight:Number(parsed.weight)}:{}),
+      ...(parsed.vaccineName?{vaccineName:parsed.vaccineName}:{}),
+      ...(parsed.nextVisit?{nextDate:formatDateFR(parsed.nextVisit),nextDateISO:parsed.nextVisit}:{}),
+    };
+    addManualAct(animal.id,act);
+    toast(`Acte ajouté à la fiche de ${animal.nm}`,'tl');
+    reset();
+    setVoiceOpen(false);
+  };
+
+  const setField=(k,v)=>setParsed(p=>({...(p||{}),[k]:v}));
+
+  if(!voiceOpen){
+    return <button onClick={()=>setVoiceOpen(true)} aria-label="Saisie vocale rapide" title="Saisie vocale rapide"
+      style={{position:'fixed',bottom:90,right:24,width:54,height:54,borderRadius:'50%',background:'linear-gradient(135deg,#C8A45C,#a88947)',color:'#fff',border:'none',fontSize:22,cursor:'pointer',boxShadow:'0 8px 24px rgba(200,164,92,.4),0 2px 6px rgba(11,29,52,.15)',zIndex:379,display:'flex',alignItems:'center',justifyContent:'center',transition:'transform .15s'}}
+      onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px) scale(1.04)'}
+      onMouseLeave={e=>e.currentTarget.style.transform='translateY(0) scale(1)'}>🎙️</button>;
+  }
+
+  const isRecording=step==='recording';
+  const isSending=step==='sending';
+  const isParsed=step==='parsed'&&parsed;
+
+  return(<div style={{position:'fixed',bottom:24,right:24,width:380,maxWidth:'calc(100vw - 24px)',maxHeight:'calc(100vh - 48px)',background:'var(--card)',borderRadius:18,boxShadow:'0 16px 50px rgba(11,29,52,.25)',border:'1px solid var(--lg)',zIndex:381,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+    {/* HEADER */}
+    <div style={{padding:'14px 16px',background:'linear-gradient(135deg,#C8A45C,#a88947)',color:'#fff',display:'flex',alignItems:'center',gap:10}}>
+      <div style={{width:34,height:34,borderRadius:'50%',background:'rgba(255,255,255,.18)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.05rem'}}>🎙️</div>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700,fontSize:'.96rem'}}>Saisie vocale</div>
+        <div style={{fontSize:'.72rem',opacity:.85}}>Dictez un acte, l'IA structure</div>
+      </div>
+      <button onClick={()=>{reset();setVoiceOpen(false);}} aria-label="Fermer" style={{background:'rgba(255,255,255,.15)',border:'none',color:'#fff',width:28,height:28,borderRadius:'50%',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><I.X/></button>
+    </div>
+
+    {/* BODY */}
+    <div style={{flex:1,overflow:'auto',padding:'16px'}}>
+      {/* Idle / recording state */}
+      {(step==='idle'||isRecording||isSending)&&<>
+        <div style={{textAlign:'center',marginBottom:14}}>
+          <button onClick={isRecording?stopMic:startMic} disabled={isSending}
+            style={{width:96,height:96,borderRadius:'50%',border:'none',cursor:isSending?'wait':'pointer',background:isRecording?'linear-gradient(135deg,#e74c3c,#c0392b)':'linear-gradient(135deg,#C8A45C,#a88947)',color:'#fff',fontSize:36,boxShadow:isRecording?'0 0 0 8px rgba(231,76,60,.18)':'0 6px 20px rgba(200,164,92,.35)',transition:'all .2s',position:'relative'}}>
+            {isSending?<div style={{width:24,height:24,border:'3px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/>:isRecording?'⏹':'🎙️'}
+          </button>
+          <div style={{fontSize:'.84rem',color:'var(--txt)',marginTop:12,fontWeight:600}}>
+            {isSending?'Analyse en cours...':isRecording?'À l\'écoute — cliquez pour arrêter':'Cliquez pour parler'}
+          </div>
+          {!isRecording&&!isSending&&<div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:6,lineHeight:1.45,padding:'0 8px'}}>Ex : "Rex est venu pour son rappel CHPL, 32 kilos, tout va bien, prochaine visite dans un an"</div>}
+        </div>
+        {transcript&&<div style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10,border:'1px solid var(--lg)',fontSize:'.84rem',color:'var(--txt)',lineHeight:1.45,fontStyle:'italic',minHeight:40}}>{transcript}</div>}
+      </>}
+
+      {/* Parsed result */}
+      {isParsed&&<>
+        <div style={{padding:'10px 12px',background:'rgba(200,164,92,.08)',borderRadius:10,border:'1px solid rgba(200,164,92,.25)',marginBottom:14,fontSize:'.8rem',color:'var(--txt2)',lineHeight:1.45,fontStyle:'italic'}}>"{transcript}"</div>
+
+        {/* Animal picker */}
+        <div style={{marginBottom:14}}>
+          <label style={{display:'block',fontSize:'.7rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:6}}>Patient</label>
+          {selectedAnimalId
+            ? (()=>{const an=activeAnimals.find(a=>a.id===selectedAnimalId);return an?<div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:'rgba(43,160,143,.08)',border:'1px solid rgba(43,160,143,.3)',borderRadius:10}}>
+                <span style={{fontSize:'1.4rem'}}>{Em[an.av]||'🐾'}</span>
+                <div style={{flex:1,minWidth:0}}><div style={{fontWeight:700,color:'var(--txt)'}}>{an.nm}</div><div style={{fontSize:'.74rem',color:'var(--txt2)'}}>{an.sp} · {an.owner}</div></div>
+                <button onClick={()=>setSelectedAnimalId(null)} style={{background:'none',border:'none',color:'var(--t)',cursor:'pointer',fontSize:'.78rem',padding:4}}>Changer</button>
+              </div>:null;})()
+            : <div>
+                <div style={{padding:'10px 12px',background:'rgba(231,76,60,.06)',border:'1px solid rgba(231,76,60,.25)',borderRadius:10,fontSize:'.82rem',color:'var(--txt)',marginBottom:8}}>
+                  {parsed.animalName?<>Aucune correspondance pour <strong>{parsed.animalName}</strong>. Sélectionnez le patient :</>:<>Aucun patient mentionné — choisissez :</>}
+                </div>
+                {(candidates.length>0?candidates:activeAnimals.slice(0,6)).map(a=>(
+                  <button key={a.id} type="button" onClick={()=>setSelectedAnimalId(a.id)} style={{display:'flex',width:'100%',alignItems:'center',gap:10,padding:'8px 10px',background:'var(--card)',border:'1px solid var(--lg)',borderRadius:8,cursor:'pointer',marginBottom:4,textAlign:'left',fontFamily:'inherit'}}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor='var(--t)'}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor='var(--lg)'}>
+                    <span style={{fontSize:'1.2rem'}}>{Em[a.av]||'🐾'}</span>
+                    <div style={{flex:1,minWidth:0}}><div style={{fontWeight:600,fontSize:'.86rem',color:'var(--txt)'}}>{a.nm}</div><div style={{fontSize:'.7rem',color:'var(--txt2)'}}>{a.sp} · {a.owner}</div></div>
+                  </button>
+                ))}
+              </div>
+          }
+        </div>
+
+        {/* Parsed fields preview / editor */}
+        <div style={{padding:'12px 14px',background:'var(--bg)',borderRadius:10,marginBottom:14}}>
+          {editing?<>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Date</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={parsed.date||''} onChange={e=>setField('date',e.target.value)}/></div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Type</label>
+                <select className="fi fi-sel" style={{padding:'6px 10px',fontSize:'.82rem'}} value={parsed.actType||'autre'} onChange={e=>setField('actType',e.target.value)}>
+                  {Object.entries(VOICE_ACT_LABEL).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+            </div>
+            {parsed.actType==='vaccination'&&<div style={{marginBottom:8}}><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Vaccin</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} value={parsed.vaccineName||''} onChange={e=>setField('vaccineName',e.target.value)} placeholder="Nom du vaccin"/></div>}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Poids (kg)</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="number" step="0.1" value={parsed.weight||''} onChange={e=>setField('weight',e.target.value?Number(e.target.value):null)}/></div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Prochain RDV</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={parsed.nextVisit||''} onChange={e=>setField('nextVisit',e.target.value)}/></div>
+            </div>
+            <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Notes</label><textarea className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} rows={2} value={parsed.notes||''} onChange={e=>setField('notes',e.target.value)}/></div>
+          </>:<>
+            <div style={{display:'grid',gridTemplateColumns:'80px 1fr',rowGap:6,columnGap:10,fontSize:'.82rem'}}>
+              <div style={{color:'var(--txt2)'}}>Type</div><div style={{color:'var(--txt)',fontWeight:600}}>{VOICE_ACT_LABEL[parsed.actType]||'Non précisé'}</div>
+              <div style={{color:'var(--txt2)'}}>Date</div><div style={{color:'var(--txt)'}}>{parsed.date?formatDateFR(parsed.date):"Aujourd'hui (par défaut)"}</div>
+              {parsed.vaccineName&&<><div style={{color:'var(--txt2)'}}>Vaccin</div><div style={{color:'var(--txt)',fontWeight:600}}>{parsed.vaccineName}</div></>}
+              {parsed.weight!=null&&<><div style={{color:'var(--txt2)'}}>Poids</div><div style={{color:'var(--txt)'}}>{parsed.weight} kg</div></>}
+              {parsed.nextVisit&&<><div style={{color:'var(--txt2)'}}>Rappel</div><div style={{color:'var(--txt)'}}>{formatDateFR(parsed.nextVisit)}</div></>}
+              {parsed.vetName&&<><div style={{color:'var(--txt2)'}}>Vétérinaire</div><div style={{color:'var(--txt)'}}>{parsed.vetName}</div></>}
+              {parsed.notes&&<><div style={{color:'var(--txt2)'}}>Notes</div><div style={{color:'var(--txt)',lineHeight:1.45}}>{parsed.notes}</div></>}
+            </div>
+          </>}
+        </div>
+      </>}
+    </div>
+
+    {/* FOOTER ACTIONS */}
+    {isParsed&&<div style={{padding:'12px 16px',borderTop:'1px solid var(--lg)',display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
+      <button className="btn btn-ghost btn-sm" onClick={reset}>Recommencer</button>
+      <button className="btn btn-o btn-sm" onClick={()=>setEditing(e=>!e)}>{editing?'Aperçu':'✏️ Corriger'}</button>
+      <button className="btn btn-t btn-sm" onClick={validate} disabled={!selectedAnimalId}><I.Check/> Ajouter à la fiche</button>
+    </div>}
+    {(step==='idle'||isRecording)&&transcript&&!isParsed&&<div style={{padding:'12px 16px',borderTop:'1px solid var(--lg)',display:'flex',gap:8,justifyContent:'flex-end'}}>
+      <button className="btn btn-ghost btn-sm" onClick={()=>{setTranscript('');if(dict.recording)dict.stop();}}>Effacer</button>
+      {!isRecording&&<button className="btn btn-t btn-sm" onClick={()=>parseTranscript(transcript)}><I.Spark/> Analyser</button>}
+    </div>}
+  </div>);
+}
+
 function Chatbot(){
   const{chatOpen,setChatOpen,nav}=useContext(Ctx);
   const[msgs,setMsgs]=useState(CHAT_INIT);const[inp,setInp]=useState('');const[typing,setTyping]=useState(false);const endRef=useRef(null);
