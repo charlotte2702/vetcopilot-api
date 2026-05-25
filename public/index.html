@@ -1279,8 +1279,8 @@ function Sidebar({open,onClose}){
     {open&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.35)',zIndex:99,backdropFilter:'blur(4px)'}} onClick={onClose}/>}
     <aside className={`sidebar ${open?'open':''}`} style={open?{transform:'translateX(0)'}:undefined}>
       <div className="sb-logo">
-        <div className="sb-logo-mark"><LogoImg white size={28}/></div>
-        <div><div className="sb-logo-text">VetCopilot</div><div className="sb-logo-sub">Pro · v3.0</div></div>
+        <img src="/icon-192.png" alt="VetCopilot" width={36} height={36} style={{borderRadius:10,display:'block',flexShrink:0}}/>
+        <div className="sb-logo-text">VetCopilot</div>
       </div>
       <div className="sb-div"/>
       <nav className="sb-nav">
