@@ -2050,46 +2050,71 @@ function PhotoLinkModal({url,animalNm}){
 // ===== DASHBOARD =====
 function VaccineRemindersCard(){
   const{nav,toast,archive}=useContext(Ctx);
-  // Walk active animals × their vaccines, keep only "soon" + "expired".
+  const[showAll,setShowAll]=useState(false);
   const reminders=useMemo(()=>{
     const list=[];
     ANIMALS.forEach(a=>{
       if((archive||{})[a.id]) return;
       (a.vacc||[]).forEach(v=>{
         const u=vaccUrgency(v);
-        if(u==='soon'||u==='expired'){
-          list.push({animal:a,vacc:v,urgency:u,days:vaccDaysLeft(v)});
-        }
+        if(u==='soon'||u==='expired') list.push({animal:a,vacc:v,urgency:u,days:vaccDaysLeft(v)});
       });
     });
     return list.sort((x,y)=>(x.days??99999)-(y.days??99999));
   },[archive]);
 
   if(reminders.length===0){
-    return(<div className="c af1">
-      <div className="c-title" style={{marginBottom:8}}>Rappels vaccins à venir</div>
-      <div style={{padding:'14px 0',textAlign:'center',color:'var(--txt2)',fontSize:'.84rem'}}>✅ Aucun vaccin à renouveler dans les 30 prochains jours.</div>
+    return(<div className="c af1" style={{marginBottom:18,padding:'14px 18px',display:'flex',alignItems:'center',gap:12,background:'rgba(22,163,74,.06)',border:'1px solid rgba(22,163,74,.2)'}}>
+      <span style={{fontSize:'1.6rem'}}>✅</span>
+      <div><div style={{fontWeight:700,color:'#16a34a',fontSize:'.92rem'}}>Tous les vaccins sont à jour</div><div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:2}}>Aucun rappel à venir dans les 30 prochains jours.</div></div>
     </div>);
   }
-  return(<div className="c af1">
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-      <div className="c-title">💉 Rappels vaccins à venir <span style={{fontSize:'.74rem',color:'var(--txt2)',fontWeight:500,marginLeft:6}}>({reminders.length})</span></div>
-    </div>
-    {reminders.slice(0,5).map((r,i)=>{
-      const expired=r.urgency==='expired';
-      const color=expired?'#dc2626':'#e67e22';
-      const bg=expired?'rgba(220,38,38,.08)':'rgba(230,126,34,.08)';
-      return(<div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:i<Math.min(4,reminders.length-1)?'1px solid var(--bg)':'none',cursor:'pointer'}} onClick={()=>nav('animal-detail',r.animal)}>
-        <div className={`apt-av ${r.animal.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem',flexShrink:0}}>{Em[r.animal.av]||'🐾'}</div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:'.86rem',fontWeight:600,color:'var(--txt)'}}>{r.animal.nm} <span style={{color:'var(--txt2)',fontWeight:400,fontSize:'.76rem'}}>· {r.animal.owner}</span></div>
-          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:1}}>{r.vacc.nm} · échéance {r.vacc.dt}</div>
+
+  const expiredCount=reminders.filter(r=>r.urgency==='expired').length;
+  const soonCount=reminders.length-expiredCount;
+  const hasExpired=expiredCount>0;
+  const accent=hasExpired?'#dc2626':'#e67e22';
+  const accentBg=hasExpired?'rgba(220,38,38,.06)':'rgba(230,126,34,.06)';
+  const visible=showAll?reminders:reminders.slice(0,6);
+
+  return(<div className="c af1" style={{marginBottom:18,padding:0,border:`1px solid ${accent}40`,overflow:'hidden'}}>
+    {/* Header band */}
+    <div style={{padding:'14px 18px',background:`linear-gradient(135deg,${accentBg},rgba(255,255,255,0))`,borderBottom:'1px solid var(--bg)',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+      <div style={{width:44,height:44,borderRadius:12,background:accent,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.3rem',flexShrink:0}}>🔔</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          <div style={{fontWeight:800,color:'var(--txt)',fontSize:'1.05rem',fontFamily:'var(--fh)'}}>Rappels vaccins</div>
+          <span style={{padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700,background:accent,color:'#fff'}}>{reminders.length}</span>
         </div>
-        <span style={{padding:'3px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700,background:bg,color,whiteSpace:'nowrap'}}>{expired?`Expiré (${Math.abs(r.days)} j)`:`${r.days} j`}</span>
-        <button className="btn btn-sm btn-o" style={{padding:'5px 10px'}} onClick={(e)=>{e.stopPropagation();toast(`Rappel envoyé à ${r.animal.owner}`,'tl');}}>Envoyer</button>
-      </div>);
-    })}
-    {reminders.length>5&&<div style={{marginTop:10,fontSize:'.74rem',color:'var(--txt2)',textAlign:'center'}}>+ {reminders.length-5} autre{reminders.length-5>1?'s':''} rappel{reminders.length-5>1?'s':''}</div>}
+        <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:3}}>
+          {expiredCount>0&&<span style={{color:'#dc2626',fontWeight:600}}>{expiredCount} expiré{expiredCount>1?'s':''}</span>}
+          {expiredCount>0&&soonCount>0&&<span style={{color:'var(--mg)',margin:'0 6px'}}>·</span>}
+          {soonCount>0&&<span style={{color:'#e67e22',fontWeight:600}}>{soonCount} à venir (&lt;30 j)</span>}
+        </div>
+      </div>
+      {reminders.length>6&&<button className="btn btn-sm btn-ghost" onClick={()=>setShowAll(s=>!s)}>{showAll?'Réduire':`Voir les ${reminders.length}`}</button>}
+    </div>
+
+    {/* Grid of reminder cards */}
+    <div style={{padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:10}}>
+      {visible.map((r,i)=>{
+        const expired=r.urgency==='expired';
+        const c=expired?'#dc2626':'#e67e22';
+        const bg=expired?'rgba(220,38,38,.06)':'rgba(230,126,34,.06)';
+        return(<div key={i} style={{padding:'12px 14px',background:bg,border:`1px solid ${c}30`,borderRadius:10,display:'flex',gap:10,alignItems:'center'}}>
+          <div className={`apt-av ${r.animal.av}`} style={{width:38,height:38,borderRadius:10,fontSize:'1.05rem',flexShrink:0}}>{Em[r.animal.av]||'🐾'}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:'.88rem',fontWeight:700,color:'var(--txt)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.animal.nm} <span style={{color:'var(--txt2)',fontWeight:400,fontSize:'.74rem'}}>· {r.animal.owner}</span></div>
+            <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.vacc.nm} · échéance {r.vacc.dt}</div>
+            <span style={{display:'inline-block',marginTop:5,padding:'2px 8px',borderRadius:8,fontSize:'.68rem',fontWeight:700,background:c,color:'#fff'}}>{expired?`Expiré · ${Math.abs(r.days)} j`:`Expire dans ${r.days} j`}</span>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:4,flexShrink:0}}>
+            <button className="btn btn-sm btn-o" style={{padding:'4px 10px',fontSize:'.74rem'}} onClick={()=>nav('animal-detail',r.animal)}>Fiche</button>
+            <button className="btn btn-sm" style={{padding:'4px 10px',fontSize:'.74rem',background:c,color:'#fff'}} onClick={()=>toast(`Rappel envoyé à ${r.animal.owner} pour ${r.animal.nm}`,'tl')}>Envoyer</button>
+          </div>
+        </div>);
+      })}
+    </div>
   </div>);
 }
 
@@ -2139,6 +2164,8 @@ function Dashboard(){
       ))}
     </div>
 
+    <VaccineRemindersCard/>
+
     <div className="gm">
       <div style={{display:'flex',flexDirection:'column',gap:18}}>
         <div className="c af2">
@@ -2155,7 +2182,6 @@ function Dashboard(){
             </div>
           ))}
         </div>
-        <VaccineRemindersCard/>
         <div className="c af3">
           <div className="c-title" style={{marginBottom:12}}>Activité de la semaine</div>
           <div style={{height:200}}><canvas ref={chartRef}/></div>
