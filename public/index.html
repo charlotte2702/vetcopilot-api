@@ -930,6 +930,7 @@ function App(){
             {page==='consultation'&&<ConsultationFlow/>}
             {/* pharmacy removed */}
             {page==='billing'&&<Billing/>}
+            {page==='subscription'&&<Subscription/>}
             {page==='stats'&&<Stats/>}
             {page==='settings'&&<Settings/>}
           </div>
@@ -1021,6 +1022,7 @@ function Sidebar({open,onClose}){
     {k:'reports',ic:<I.File/>,l:'Comptes rendus',b:3,bt:'tl'},
     {s:'Gestion'},
     {k:'billing',ic:<I.Euro/>,l:'Facturation'},
+    {k:'subscription',ic:<I.Zap/>,l:'Mon abonnement'},
     {s:'Outils'},
     {k:'stats',ic:<I.Chart/>,l:'Statistiques'},
     {k:'settings',ic:<I.Gear/>,l:'Paramètres'},
@@ -2972,6 +2974,159 @@ function Billing(){
       </table>}
     </div>
     {!invoicesLoading&&filtered.length>0&&<div style={{padding:'10px 4px',fontSize:'.74rem',color:'var(--txt2)',textAlign:'right'}}>{filtered.length} facture{filtered.length>1?'s':''} affichée{filtered.length>1?'s':''}</div>}
+  </div>);
+}
+
+// ===== SUBSCRIPTION =====
+const FEATURE_META={
+  diagnostic:    {label:'Diagnostic IA',       ic:'🧠',color:'#2BA08F'},
+  soap:          {label:'Comptes rendus SOAP', ic:'📋',color:'#0B1D34'},
+  ordonnance:    {label:'Ordonnances',         ic:'💊',color:'#C8A45C'},
+  chat:          {label:'Chatbot',             ic:'💬',color:'#9b59b6'},
+  imageAnalysis: {label:"Analyse d'image",     ic:'🖼️',color:'#3498db'},
+};
+function progressColor(pct){
+  if(pct>=100) return '#dc2626';
+  if(pct>=80)  return '#dc2626';
+  if(pct>=50)  return '#e67e22';
+  return '#16a34a';
+}
+function fmtMonthRange(startISO,endISO){
+  const fmt=iso=>{
+    const d=new Date(iso);
+    return d.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
+  };
+  return `${fmt(startISO)} – ${fmt(endISO)}`;
+}
+function Subscription(){
+  const{toast}=useContext(Ctx);
+  const[data,setData]=useState(null);
+  const[usage,setUsage]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const chartRef=useRef(null);
+  const chartInst=useRef(null);
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+
+  useEffect(()=>{
+    let cancelled=false;
+    Promise.all([
+      fetch('/api/subscription').then(r=>r.json()),
+      fetch('/api/subscription/usage').then(r=>r.json()),
+    ]).then(([sub,use])=>{
+      if(cancelled) return;
+      if(sub&&sub.ok) setData(sub);
+      if(use&&use.ok) setUsage(use.days||[]);
+      setLoading(false);
+    }).catch(()=>{ if(!cancelled){setLoading(false);toast("Impossible de charger l'abonnement",'r');} });
+    return()=>{cancelled=true;};
+  // eslint-disable-next-line
+  },[]);
+
+  // Build the daily-usage chart once data lands
+  useEffect(()=>{
+    if(!usage||!chartRef.current) return;
+    const labels=usage.map(d=>d.date.slice(8,10)); // day-of-month
+    const counts=usage.map(d=>d.count);
+    chartInst.current?.destroy();
+    const txtC=isDark?'#6B7B8D':'#8C98A6';
+    const gridC=isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.04)';
+    chartInst.current=new Chart(chartRef.current,{
+      type:'line',
+      data:{labels,datasets:[{label:'Requêtes',data:counts,borderColor:'#2BA08F',backgroundColor:'rgba(43,160,143,.12)',fill:true,tension:.35,pointBackgroundColor:'#2BA08F',pointBorderColor:isDark?'#161B22':'#fff',pointBorderWidth:2,pointRadius:3,borderWidth:2.2}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{title:items=>{const d=usage[items[0].dataIndex];return new Date(d.date).toLocaleDateString('fr-FR',{day:'numeric',month:'long'});},label:c=>`${c.parsed.y} requête${c.parsed.y>1?'s':''}`}}},scales:{y:{grid:{color:gridC},beginAtZero:true,ticks:{color:txtC,precision:0}},x:{grid:{display:false},ticks:{color:txtC,maxRotation:0,autoSkip:true,maxTicksLimit:10}}}}
+    });
+    return()=>{chartInst.current?.destroy();chartInst.current=null;};
+  },[usage,isDark]);
+
+  if(loading) return <div style={{padding:50,textAlign:'center',color:'var(--txt2)'}}>Chargement de l'abonnement...</div>;
+  if(!data) return <div style={{padding:50,textAlign:'center',color:'var(--txt2)'}}>Aucune donnée d'abonnement disponible.</div>;
+
+  const totalPct=data.total.pct;
+  const totalColor=progressColor(totalPct);
+  const periodLabel=fmtMonthRange(data.period.start,data.period.end);
+
+  return(<div>
+    {/* HEADER */}
+    <div className="c af" style={{marginBottom:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+          <div style={{width:46,height:46,borderRadius:12,background:'linear-gradient(135deg,var(--t),#1f857a)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><I.Zap/></div>
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <h2 style={{fontFamily:'var(--fh)',fontSize:'1.3rem',color:'var(--txt)'}}>Plan {data.plan}</h2>
+              <span className="tag tag-t" style={{fontSize:'.68rem'}}>Actif</span>
+            </div>
+            <div style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:3}}>Période : {periodLabel}</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <a href="#" onClick={e=>{e.preventDefault();toast('Historique de facturation (à venir)','info');}} className="btn btn-o btn-sm" style={{textDecoration:'none'}}>Historique de facturation</a>
+          <a href="#" onClick={e=>{e.preventDefault();toast('Upgrade Stripe à venir','info');}} className="btn btn-t btn-sm" style={{textDecoration:'none'}}><I.ArrowUp/> Augmenter mon forfait</a>
+        </div>
+      </div>
+    </div>
+
+    {/* ALERT BANNERS */}
+    {totalPct>=100&&<div style={{padding:'14px 16px',background:'rgba(220,38,38,.08)',border:'1px solid rgba(220,38,38,.25)',borderRadius:12,marginBottom:14,display:'flex',gap:10,alignItems:'center'}}>
+      <span style={{fontSize:'1.3rem'}}>🚫</span>
+      <div style={{flex:1}}><div style={{fontWeight:700,color:'#dc2626'}}>Forfait épuisé</div><div style={{fontSize:'.82rem',color:'var(--txt2)'}}>Passez au plan supérieur pour continuer à utiliser l'IA.</div></div>
+    </div>}
+    {totalPct>=80&&totalPct<100&&<div style={{padding:'14px 16px',background:'rgba(220,38,38,.08)',border:'1px solid rgba(220,38,38,.25)',borderRadius:12,marginBottom:14,display:'flex',gap:10,alignItems:'center'}}>
+      <span style={{fontSize:'1.3rem'}}>⚠️</span>
+      <div style={{flex:1}}><div style={{fontWeight:700,color:'#dc2626'}}>Attention, il vous reste peu de requêtes</div><div style={{fontSize:'.82rem',color:'var(--txt2)'}}>Vous avez utilisé {totalPct}% de votre forfait mensuel.</div></div>
+    </div>}
+    {totalPct>=50&&totalPct<80&&<div style={{padding:'14px 16px',background:'rgba(230,126,34,.08)',border:'1px solid rgba(230,126,34,.25)',borderRadius:12,marginBottom:14,display:'flex',gap:10,alignItems:'center'}}>
+      <span style={{fontSize:'1.3rem'}}>📊</span>
+      <div style={{flex:1}}><div style={{fontWeight:700,color:'#e67e22'}}>Vous avez utilisé la moitié de votre forfait</div><div style={{fontSize:'.82rem',color:'var(--txt2)'}}>Encore {data.total.limit-data.total.used} requêtes disponibles ce mois-ci.</div></div>
+    </div>}
+
+    {/* TOTAL PROGRESS */}
+    <div className="c af" style={{marginBottom:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:10,flexWrap:'wrap',gap:8}}>
+        <div className="c-title">Utilisation globale ce mois</div>
+        <div style={{fontSize:'.84rem',color:'var(--txt2)'}}><span style={{fontFamily:'var(--fh)',fontSize:'1.1rem',fontWeight:800,color:'var(--txt)'}}>{data.total.used}</span> / {data.total.limit} requêtes <span style={{color:totalColor,fontWeight:700,marginLeft:6}}>({totalPct}%)</span></div>
+      </div>
+      <div style={{height:12,background:'var(--bg)',borderRadius:6,overflow:'hidden'}}>
+        <div style={{height:'100%',width:`${Math.max(2,totalPct)}%`,background:totalColor,borderRadius:6,transition:'width .35s'}}/>
+      </div>
+    </div>
+
+    {/* FEATURE CARDS */}
+    <div className="c-title" style={{margin:'18px 4px 10px'}}>Détail par fonctionnalité</div>
+    <div className="stats af" style={{gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',marginBottom:16}}>
+      {data.features.map(f=>{
+        const meta=FEATURE_META[f.key]||{label:f.key,ic:'•',color:'#666'};
+        const c=progressColor(f.pct);
+        return(<div key={f.key} className="c" style={{padding:16}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+            <div style={{width:34,height:34,borderRadius:9,background:`${meta.color}1a`,color:meta.color,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.05rem',flexShrink:0}}>{meta.ic}</div>
+            <div style={{flex:1,minWidth:0}}><div style={{fontWeight:600,fontSize:'.86rem',color:'var(--txt)'}}>{meta.label}</div><div style={{fontSize:'.72rem',color:'var(--txt2)'}}>{f.used} / {f.limit}</div></div>
+            <div style={{fontWeight:700,fontFamily:'var(--fh)',fontSize:'.92rem',color:c}}>{f.pct}%</div>
+          </div>
+          <div style={{height:6,background:'var(--bg)',borderRadius:3,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${Math.max(2,f.pct)}%`,background:c,borderRadius:3,transition:'width .3s'}}/>
+          </div>
+        </div>);
+      })}
+    </div>
+
+    {/* USAGE CHART */}
+    <div className="c af" style={{marginBottom:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}}>
+        <div className="c-title">Activité quotidienne — {new Date().toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</div>
+        {usage&&<div style={{fontSize:'.74rem',color:'var(--txt2)'}}>Moyenne : {(usage.reduce((s,d)=>s+d.count,0)/Math.max(1,usage.length)).toFixed(1)} / jour</div>}
+      </div>
+      <div style={{position:'relative',height:220}}><canvas ref={chartRef}/></div>
+    </div>
+
+    {/* BOTTOM ACTIONS */}
+    <div className="c af" style={{padding:'18px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,background:'linear-gradient(135deg,rgba(43,160,143,.06),rgba(200,164,92,.04))'}}>
+      <div style={{flex:1,minWidth:240}}>
+        <div style={{fontWeight:700,color:'var(--txt)',marginBottom:3}}>Besoin de plus de requêtes ?</div>
+        <div style={{fontSize:'.82rem',color:'var(--txt2)'}}>Passez au plan Pro+ pour 5 000 requêtes/mois.</div>
+      </div>
+      <a href="#" onClick={e=>{e.preventDefault();toast('Upgrade Stripe à venir','info');}} className="btn btn-t" style={{textDecoration:'none'}}><I.ArrowUp/> Augmenter mon forfait</a>
+    </div>
   </div>);
 }
 
