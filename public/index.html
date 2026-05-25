@@ -4053,6 +4053,53 @@ function StatCard({ic,label,value,trend,color}){
 // ===== EMERGENCIES =====
 // Static protocols, no AI. Each step has plain text; meds have a dose formula
 // applied to the patient weight entered at the top of the protocol.
+
+// Allergy → drug-family matcher. `matches` are substrings of the med name
+// (lowercased) that should trigger a red contraindication banner.
+const ALLERGY_CONTRA={
+  'pénicilline':{matches:['amoxicilline','pénicilline','amox/clav'],alt:'Marbofloxacine 2 mg/kg PO ou doxycycline 5 mg/kg PO'},
+  'amoxicilline':{matches:['amoxicilline','amox/clav','pénicilline'],alt:'Marbofloxacine ou doxycycline'},
+  'aspirine':{matches:['aspirine','salicyl'],alt:'Méloxicam 0.1 mg/kg (chien) ou buprénorphine'},
+  'sulfamide':{matches:['sulfa','trimétho'],alt:'Marbofloxacine ou doxycycline'},
+  'anti-inflammatoire':{matches:['carprofène','méloxicam','aspirine','ains'],alt:'Opioïde (méthadone, tramadol)'},
+};
+// Species-specific contraindications. Match substrings of the med name.
+const SPECIES_CONTRA={
+  Chat:[
+    {match:'paracétamol',label:'TOXIQUE pour le chat (méthémoglobinémie fatale)',alt:'Méloxicam 0.05 mg/kg PO ou buprénorphine 0.02 mg/kg'},
+    {match:'aspirine',   label:'Métabolisme très lent — toxicité élevée',         alt:'Méloxicam dose chat ou opioïde'},
+    {match:'perméthrine',label:'TOXIQUE neurologique chez le chat',                alt:'Fipronil uniquement'},
+  ],
+  Lapin:[
+    {match:'amoxicilline',label:'Dysbiose intestinale fatale chez le lapin', alt:'Enrofloxacine 5 mg/kg PO ou triméthoprime-sulfa'},
+    {match:'amox/clav',   label:'Dysbiose intestinale fatale chez le lapin', alt:'Enrofloxacine ou triméthoprime-sulfa'},
+    {match:'clindamycine',label:'Toxique pour le lapin',                     alt:'Enrofloxacine ou triméthoprime-sulfa'},
+  ],
+  Perroquet:[
+    {match:'doxycycline',label:'Prudence — risque hépatique chez certains oiseaux, dose adaptée',alt:'Enrofloxacine 15 mg/kg PO'},
+  ],
+};
+function parseWeight(s){if(!s)return null;const m=String(s).match(/[\d,.]+/);if(!m)return null;return Number(m[0].replace(',','.'))||null;}
+function medContraindications(medName,animal){
+  if(!animal) return [];
+  const warns=[];
+  const lc=String(medName||'').toLowerCase();
+  (animal.allergy||[]).forEach(allergy=>{
+    const key=allergy.toLowerCase();
+    const def=ALLERGY_CONTRA[key];
+    if(!def) return;
+    if(def.matches.some(m=>lc.includes(m))){
+      warns.push({kind:'allergy',severity:'critical',label:`Allergie ${allergy}`,detail:`${animal.nm} est allergique à la ${allergy} — NE PAS ADMINISTRER`,alt:def.alt});
+    }
+  });
+  (SPECIES_CONTRA[animal.sp]||[]).forEach(rule=>{
+    if(lc.includes(rule.match)){
+      warns.push({kind:'species',severity:'high',label:`Interdit chez ${animal.sp.toLowerCase()}`,detail:rule.label,alt:rule.alt});
+    }
+  });
+  return warns;
+}
+
 const EMERGENCIES=[
   {id:'gdv',label:"Torsion d'estomac (GDV)",icon:'🌀',severity:'Critique',
     steps:[
@@ -4161,13 +4208,23 @@ const EMERGENCIES=[
 ];
 
 function Emergencies(){
-  const{nav}=useContext(Ctx);
+  const{archive}=useContext(Ctx);
   const[active,setActive]=useState(null); // protocol id
   const[stepIdx,setStepIdx]=useState(0);
   const[elapsed,setElapsed]=useState(0);
-  const[weight,setWeight]=useState('');
+  const[selectedAnimalId,setSelectedAnimalId]=useState(null);
+  const[unknownMode,setUnknownMode]=useState(false); // user clicked "Pas le temps"
+  const[manualWeight,setManualWeight]=useState('');
   const startRef=useRef(null);
   const timerRef=useRef(null);
+
+  const activeAnimals=useMemo(()=>ANIMALS.filter(a=>!(archive||{})[a.id]),[archive]);
+  const animal=selectedAnimalId?activeAnimals.find(a=>a.id===selectedAnimalId):null;
+  const animalWeight=animal?parseWeight(animal.wt):null;
+  // Effective weight: animal's parsed weight wins; otherwise the manual input
+  // (the vet can still override per-protocol if needed).
+  const effectiveWeight=animalWeight||Number(manualWeight)||0;
+  const patientReady=animal!==null||unknownMode;
 
   // Tick the elapsed timer once a protocol is opened.
   useEffect(()=>{
@@ -4182,19 +4239,62 @@ function Emergencies(){
   const protocol=active?EMERGENCIES.find(p=>p.id===active):null;
   const step=protocol?protocol.steps[stepIdx]:null;
 
+  const PatientPickerCard=()=>(
+    <div className="c af1" style={{marginBottom:14,padding:'16px 18px',border:`1px solid ${patientReady?'var(--lg)':'rgba(231,76,60,.3)'}`}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+        <div className="c-title">Patient concerné</div>
+        {!animal&&!unknownMode&&<button className="btn btn-sm btn-ghost" onClick={()=>setUnknownMode(true)} title="Lancer un protocole sans sélectionner d'animal">⏱ Pas le temps</button>}
+        {(animal||unknownMode)&&<button className="btn btn-sm btn-ghost" onClick={()=>{setSelectedAnimalId(null);setUnknownMode(false);setManualWeight('');}}>Changer</button>}
+      </div>
+      {!animal&&!unknownMode&&<>
+        <select className="fi fi-sel" value={selectedAnimalId||''} onChange={e=>setSelectedAnimalId(e.target.value?Number(e.target.value):null)}>
+          <option value="">— Sélectionner un patient —</option>
+          {activeAnimals.map(a=><option key={a.id} value={a.id}>{a.nm} — {a.sp} ({a.breed}) · {a.wt}</option>)}
+        </select>
+        <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:10,lineHeight:1.45}}>Sélectionnez un patient pour pré-remplir le poids et activer les alertes allergies / espèce. Si l'animal est inconnu ou s'il y a urgence absolue, cliquez "Pas le temps".</div>
+      </>}
+      {animal&&<div style={{display:'flex',gap:14,alignItems:'flex-start'}}>
+        <div className={`apt-av ${animal.av}`} style={{width:54,height:54,borderRadius:12,fontSize:'1.4rem',flexShrink:0}}>{Em[animal.av]||'🐾'}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
+            <div style={{fontWeight:700,color:'var(--txt)',fontSize:'1.05rem',fontFamily:'var(--fh)'}}>{animal.nm}</div>
+            <span className="tag tag-b" style={{fontSize:'.66rem'}}>{animal.sp} · {animal.breed}</span>
+            <span className="tag tag-b" style={{fontSize:'.66rem'}}>{animal.age}</span>
+            <span className="tag tag-b" style={{fontSize:'.66rem'}}>{animal.sex==='M'?'♂':'♀'}</span>
+            <span style={{padding:'2px 9px',borderRadius:8,fontSize:'.7rem',fontWeight:700,background:'rgba(43,160,143,.12)',color:'var(--t)'}}>⚖ {animal.wt}</span>
+          </div>
+          {animal.allergy&&animal.allergy.length>0
+            ? <div style={{fontSize:'.78rem',color:'#dc2626',fontWeight:600,marginTop:4}}>⚠️ Allergies : {animal.allergy.join(', ')}</div>
+            : <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:4}}>Aucune allergie connue</div>}
+          {(SPECIES_CONTRA[animal.sp]||[]).length>0&&<div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:4,fontStyle:'italic'}}>Contre-indications spécifiques à l'espèce activées</div>}
+        </div>
+      </div>}
+      {unknownMode&&!animal&&<div style={{padding:'10px 12px',background:'rgba(231,76,60,.08)',border:'1px solid rgba(231,76,60,.3)',borderRadius:10,display:'flex',gap:10,alignItems:'center'}}>
+        <span style={{fontSize:'1.4rem'}}>🚨</span>
+        <div style={{flex:1,fontSize:'.84rem',color:'var(--txt)',lineHeight:1.4}}>
+          <strong style={{color:'#c0392b'}}>Animal inconnu</strong> — saisissez le poids manuellement dans le protocole. Aucune alerte allergie ne sera affichée.
+        </div>
+      </div>}
+    </div>
+  );
+
   // LIST VIEW
   if(!active) return(<div>
-    <div style={{padding:'14px 18px',background:'linear-gradient(135deg,rgba(231,76,60,.1),rgba(231,76,60,.04))',border:'1px solid rgba(231,76,60,.3)',borderRadius:14,marginBottom:18,display:'flex',gap:14,alignItems:'center'}}>
+    <div style={{padding:'14px 18px',background:'linear-gradient(135deg,rgba(231,76,60,.1),rgba(231,76,60,.04))',border:'1px solid rgba(231,76,60,.3)',borderRadius:14,marginBottom:14,display:'flex',gap:14,alignItems:'center'}}>
       <span style={{fontSize:'2rem'}}>🚨</span>
       <div style={{flex:1}}>
         <div style={{fontWeight:700,color:'#c0392b',fontFamily:'var(--fh)',fontSize:'1.05rem'}}>Module Urgences</div>
-        <div style={{fontSize:'.84rem',color:'var(--txt2)',marginTop:2}}>Protocoles cliniques en step-by-step. Chronomètre intégré, posologies calculées par poids.</div>
+        <div style={{fontSize:'.84rem',color:'var(--txt2)',marginTop:2}}>Sélectionnez d'abord le patient, puis le protocole. Chronomètre intégré, posologies calculées, alertes allergies/espèce.</div>
       </div>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:12}}>
-      {EMERGENCIES.map(p=>(<button key={p.id} type="button" onClick={()=>{setActive(p.id);setStepIdx(0);}}
-        style={{display:'flex',gap:14,alignItems:'center',padding:'16px 18px',background:'var(--card)',border:'1px solid var(--lg)',borderRadius:14,cursor:'pointer',textAlign:'left',transition:'all .15s',fontFamily:'inherit'}}
-        onMouseEnter={e=>{e.currentTarget.style.borderColor='#e74c3c';e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 6px 18px rgba(231,76,60,.12)';}}
+
+    <PatientPickerCard/>
+
+    <div style={{fontSize:'.7rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:10}}>Protocoles disponibles</div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:12,opacity:patientReady?1:.5,pointerEvents:patientReady?'auto':'none',transition:'opacity .2s'}}>
+      {EMERGENCIES.map(p=>(<button key={p.id} type="button" disabled={!patientReady} onClick={()=>{setActive(p.id);setStepIdx(0);}}
+        style={{display:'flex',gap:14,alignItems:'center',padding:'16px 18px',background:'var(--card)',border:'1px solid var(--lg)',borderRadius:14,cursor:patientReady?'pointer':'not-allowed',textAlign:'left',transition:'all .15s',fontFamily:'inherit'}}
+        onMouseEnter={e=>{if(!patientReady) return;e.currentTarget.style.borderColor='#e74c3c';e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 6px 18px rgba(231,76,60,.12)';}}
         onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--lg)';e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none';}}>
         <div style={{width:46,height:46,borderRadius:12,background:'rgba(231,76,60,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.6rem',flexShrink:0}}>{p.icon}</div>
         <div style={{flex:1,minWidth:0}}>
@@ -4204,6 +4304,7 @@ function Emergencies(){
         <I.ChevR/>
       </button>))}
     </div>
+    {!patientReady&&<div style={{textAlign:'center',marginTop:10,fontSize:'.78rem',color:'var(--txt2)',fontStyle:'italic'}}>Sélectionnez un patient ou cliquez "Pas le temps" pour activer les protocoles.</div>}
   </div>);
 
   // PROTOCOL VIEW
@@ -4214,10 +4315,32 @@ function Emergencies(){
       <span style={{background:'rgba(255,255,255,.95)',color:'#c0392b',padding:'4px 12px',borderRadius:8,fontSize:'.7rem',fontWeight:800,letterSpacing:'.1em'}}>🚨 URGENCE</span>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontWeight:700,fontSize:'1.05rem',fontFamily:'var(--fh)'}}>{protocol.icon} {protocol.label}</div>
-        <div style={{fontSize:'.76rem',opacity:.85}}>Étape {stepIdx+1} sur {protocol.steps.length}</div>
+        <div style={{fontSize:'.76rem',opacity:.85}}>Étape {stepIdx+1} sur {protocol.steps.length}{animal?` · ${animal.nm} (${animal.wt})`:unknownMode?' · Animal inconnu':''}</div>
       </div>
       <div style={{padding:'8px 14px',background:'rgba(0,0,0,.3)',borderRadius:10,fontFamily:'monospace',fontSize:'1.3rem',fontWeight:700,letterSpacing:'.05em'}}>⏱ {fmtElapsed(elapsed)}</div>
     </div>
+
+    {/* Aggregated allergy / species alerts (top of protocol) */}
+    {animal&&(()=>{
+      const flagged=protocol.meds.map(m=>({m,warns:medContraindications(m.nm,animal)})).filter(x=>x.warns.length>0);
+      if(flagged.length===0) return null;
+      return(<div style={{padding:'14px 16px',background:'rgba(220,38,38,.08)',border:'1px solid rgba(220,38,38,.35)',borderRadius:12,marginBottom:14}}>
+        <div style={{display:'flex',gap:10,alignItems:'flex-start',marginBottom:8}}>
+          <span style={{fontSize:'1.4rem'}}>⚠️</span>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,color:'#c0392b',fontSize:'.96rem'}}>ALERTES contre-indications — {animal.nm}</div>
+            <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:2}}>Vérifiez avant administration. Doses adaptées proposées ci-dessous.</div>
+          </div>
+        </div>
+        {flagged.map((x,i)=>x.warns.map((w,j)=>(
+          <div key={`${i}-${j}`} style={{padding:'10px 12px',background:'rgba(220,38,38,.06)',borderLeft:'3px solid #dc2626',borderRadius:6,marginTop:8,fontSize:'.84rem',color:'var(--txt)',lineHeight:1.45}}>
+            <div style={{fontWeight:700,color:'#dc2626'}}>{w.kind==='allergy'?'⚠️ ALLERGIE':'🚫 INTERDIT'} · {x.m.nm}</div>
+            <div style={{marginTop:3}}>{w.detail}</div>
+            <div style={{marginTop:4,fontSize:'.8rem',color:'var(--t)',fontWeight:600}}>Alternative : {w.alt}</div>
+          </div>
+        )))}
+      </div>);
+    })()}
 
     {/* Step progress */}
     <div style={{display:'flex',gap:4,marginBottom:14}}>
@@ -4249,24 +4372,27 @@ function Emergencies(){
         <div className="c-title">Médicaments d'urgence · doses calculées</div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
           <label style={{fontSize:'.78rem',color:'var(--txt2)'}}>Poids :</label>
-          <div style={{position:'relative'}}>
-            <input className="fi" type="number" step="0.1" min="0" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="kg" style={{width:90,padding:'6px 28px 6px 10px',fontSize:'.84rem'}}/>
-            <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',fontSize:'.74rem',color:'var(--txt2)',pointerEvents:'none'}}>kg</span>
-          </div>
+          {animal
+            ? <span style={{padding:'6px 12px',background:'rgba(43,160,143,.1)',color:'var(--t)',borderRadius:8,fontSize:'.84rem',fontWeight:700}}>{animalWeight} kg <span style={{fontWeight:400,fontSize:'.72rem',color:'var(--txt2)'}}>· {animal.nm}</span></span>
+            : <div style={{position:'relative'}}>
+                <input className="fi" type="number" step="0.1" min="0" value={manualWeight} onChange={e=>setManualWeight(e.target.value)} placeholder="kg" style={{width:90,padding:'6px 28px 6px 10px',fontSize:'.84rem'}}/>
+                <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',fontSize:'.74rem',color:'var(--txt2)',pointerEvents:'none'}}>kg</span>
+              </div>}
         </div>
       </div>
       <table className="tbl">
         <thead><tr><th>Médicament</th><th>Posologie</th><th style={{textAlign:'right'}}>Dose calculée</th><th>Note</th></tr></thead>
         <tbody>{protocol.meds.map((m,i)=>{
-          const w=Number(weight);
+          const w=effectiveWeight;
           const dose=w&&w>0?(m.formula*w):null;
-          const unit=m.unit.split(' ').slice(1).join(' ')||m.unit;
           const baseUnit=m.unit.split(' ')[0];
-          return(<tr key={i}>
-            <td><strong style={{color:'var(--txt)'}}>{m.nm}</strong></td>
+          const warns=medContraindications(m.nm,animal);
+          const blocked=warns.length>0;
+          return(<tr key={i} style={blocked?{background:'rgba(220,38,38,.05)'}:undefined}>
+            <td><strong style={{color:'var(--txt)',textDecoration:blocked?'line-through':'none',opacity:blocked?.7:1}}>{m.nm}</strong>{blocked&&<div style={{fontSize:'.7rem',fontWeight:700,color:'#dc2626',marginTop:3}}>⚠️ {warns[0].label}</div>}</td>
             <td style={{fontSize:'.84rem',color:'var(--txt2)'}}>{m.formula} {m.unit}</td>
-            <td style={{textAlign:'right',fontFamily:'var(--fh)',fontWeight:700,color:dose?'#c0392b':'var(--mg)'}}>{dose?`${dose.toFixed(2)} ${baseUnit}`:'— saisir poids'}</td>
-            <td style={{fontSize:'.78rem',color:'var(--txt2)'}}>{m.note}</td>
+            <td style={{textAlign:'right',fontFamily:'var(--fh)',fontWeight:700,color:blocked?'#dc2626':(dose?'#c0392b':'var(--mg)'),textDecoration:blocked?'line-through':'none'}}>{dose?`${dose.toFixed(2)} ${baseUnit}`:'— saisir poids'}</td>
+            <td style={{fontSize:'.78rem',color:blocked?'#dc2626':'var(--txt2)'}}>{blocked?warns[0].alt:m.note}</td>
           </tr>);
         })}</tbody>
       </table>
