@@ -618,6 +618,26 @@ const INVOICES=[
 ];
 const CHAT_INIT=[{r:'bot',t:"Bonjour Dr. Martin ! Je suis VetCopilot AI. Posez-moi une question sur vos patients, protocoles, plannings ou médicaments. 🩺"}];
 
+// Clinic team. `color` seeds the avatar gradient when no photo is set.
+const TEAM=[
+  {id:1,firstName:'Jean',lastName:'Martin',role:'Vétérinaire principal',email:'dr.martin@vetcopilot.fr',phone:'06 12 34 56 78',specialty:'Chirurgie, médecine interne',status:'active',color:'#2BA08F'},
+  {id:2,firstName:'Sophie',lastName:'Durand',role:'Vétérinaire',email:'dr.durand@vetcopilot.fr',phone:'06 23 45 67 89',specialty:'Dermatologie, NAC',status:'active',color:'#C8A45C'},
+  {id:3,firstName:'Julie',lastName:'Lambert',role:'ASV',email:'julie.lambert@vetcopilot.fr',phone:'06 34 56 78 90',specialty:'',status:'off',color:'#9b59b6'},
+  {id:4,firstName:'Marie',lastName:'Petit',role:'Secrétaire',email:'marie.petit@vetcopilot.fr',phone:'06 45 67 89 01',specialty:'',status:'leave',color:'#3498db'},
+];
+function teamMemberInitials(m){
+  return ((m.firstName||'?')[0] + (m.lastName||'')[0]).toUpperCase();
+}
+function teamMemberFullName(m){
+  const prefix=m.role&&m.role.startsWith('Vétérinaire')?'Dr. ':'';
+  return `${prefix}${m.firstName} ${m.lastName}`;
+}
+const TEAM_STATUS_META={
+  active:{label:'En service',color:'#16a34a',bg:'rgba(22,163,74,.12)'},
+  off:   {label:'Absent',    color:'#e67e22',bg:'rgba(230,126,34,.12)'},
+  leave: {label:'En congé',  color:'#3498db',bg:'rgba(52,152,219,.12)'},
+};
+
 // ===== CONTEXT =====
 const Ctx=createContext();
 const stL={confirmed:'Confirmé',ok:'Confirmé',wait:'En attente',urg:'Urgent',done:'Terminé',soon:'Programmé',late:'En retard',pending:'En attente',paid:'Payé',overdue:'Impayé'};
@@ -855,6 +875,39 @@ function App(){
       return next;
     });
   },[]);
+
+  // Team-member photos: { [memberId]: dataUrl }. Same persistence pattern as
+  // animal photos. `currentUserId` is the active member shown in the sidebar
+  // and persists across reloads so refreshing doesn't bump back to Dr Martin.
+  const USER_PHOTOS_KEY='vetcopilot:user-photos';
+  const[userPhotos,setUserPhotos]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(USER_PHOTOS_KEY)||'{}');}catch(_){return{};}
+  });
+  const setUserPhoto=useCallback((id,dataUrl)=>{
+    setUserPhotos(prev=>{
+      const next={...prev,[id]:dataUrl};
+      try{localStorage.setItem(USER_PHOTOS_KEY,JSON.stringify(next));}catch(_){}
+      return next;
+    });
+  },[]);
+  const[currentUserId,setCurrentUserId]=useState(()=>{
+    try{const v=parseInt(localStorage.getItem('vet.currentUserId')||'1',10);return Number.isFinite(v)?v:1;}catch(_){return 1;}
+  });
+  const switchUser=useCallback((id)=>{
+    setCurrentUserId(id);
+    try{localStorage.setItem('vet.currentUserId',String(id));}catch(_){}
+  },[]);
+  // Team roster lives in state so the Team page can append new members and
+  // have them appear immediately in the sidebar + login quick-profiles. The
+  // TEAM constant is just the seed; reset on hard refresh (acceptable for
+  // a prototype).
+  const[teamMembers,setTeamMembers]=useState(()=>TEAM.map(m=>({...m})));
+  const addTeamMember=useCallback((draft)=>{
+    setTeamMembers(prev=>{
+      const id=Math.max(0,...prev.map(p=>p.id))+1;
+      return[...prev,{id,status:'active',color:'#3498db',...draft}];
+    });
+  },[]);
   const notifiedAptsRef=useRef(new Set()); // dedup: ids of APTS we've already alerted on
 
   const addNotif=useCallback((n)=>{
@@ -942,7 +995,7 @@ function App(){
   if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember}}>
       <div className={`app${IS_EMBED?' embed':''}`}>
         {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
         <main className="main">
@@ -957,6 +1010,7 @@ function App(){
             {page==='consultation'&&<ConsultationFlow/>}
             {/* pharmacy removed */}
             {page==='billing'&&<Billing/>}
+            {page==='team'&&<Team/>}
             {page==='subscription'&&<Subscription/>}
             {page==='stats'&&<Stats/>}
             {page==='settings'&&<Settings/>}
@@ -975,12 +1029,65 @@ function App(){
 }
 
 // ===== LOGIN =====
+// Avatar for a team member — photo if uploaded, else a colored circle with
+// initials. `editable` adds a camera badge + opens a file picker on click.
+// `online` shows the green status dot used in the sidebar bottom strip.
+function UserAvatar({member,size=36,editable=false,online=false,onChange}){
+  const{userPhotos,setUserPhoto,toast}=useContext(Ctx);
+  const inputRef=useRef(null);
+  if(!member) return null;
+  const photo=userPhotos[member.id];
+  const initials=teamMemberInitials(member);
+  const color1=member.color||'var(--t)';
+  const color2='var(--g)';
+  const handlePick=async(e)=>{
+    const f=e.target.files&&e.target.files[0];
+    e.target.value='';
+    if(!f) return;
+    if(!f.type.startsWith('image/')){toast('Sélectionnez une image (JPEG ou PNG)','r');return;}
+    if(f.size>10*1024*1024){toast('Image trop volumineuse (max 10 MB)','r');return;}
+    try{
+      const dataUrl=await resizeImageFile(f,400,0.85);
+      setUserPhoto(member.id,dataUrl);
+      onChange&&onChange(dataUrl);
+      toast(`Photo de ${teamMemberFullName(member)} mise à jour`,'tl');
+    }catch(err){toast(`Erreur : ${err.message||err}`,'r');}
+  };
+  const ring=editable?'box-shadow:0 0 0 0 rgba(43,160,143,.0);':'';
+  const inner=photo
+    ? <img src={photo} alt={initials} style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
+    : <span style={{fontWeight:700,fontSize:Math.max(10,size*0.36)+'px',color:'#fff',letterSpacing:'.02em'}}>{initials}</span>;
+  return(<div style={{position:'relative',width:size,height:size,flexShrink:0}}>
+    <div onClick={editable?()=>inputRef.current&&inputRef.current.click():undefined}
+      role={editable?'button':undefined} tabIndex={editable?0:undefined}
+      onKeyDown={editable?(e)=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inputRef.current&&inputRef.current.click();}}:undefined}
+      style={{width:size,height:size,borderRadius:'50%',background:photo?'transparent':`linear-gradient(135deg,${color1},${color2})`,display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',cursor:editable?'pointer':'default',transition:'transform .15s'}}
+      onMouseEnter={editable?(e)=>e.currentTarget.style.transform='scale(1.05)':undefined}
+      onMouseLeave={editable?(e)=>e.currentTarget.style.transform='scale(1)':undefined}
+      title={editable?`Changer la photo de ${teamMemberFullName(member)}`:teamMemberFullName(member)}
+      aria-label={editable?`Changer la photo de ${teamMemberFullName(member)}`:teamMemberFullName(member)}>
+      {inner}
+    </div>
+    {online&&<div aria-hidden="true" style={{position:'absolute',bottom:Math.max(0,size*0.02),right:Math.max(0,size*0.02),width:Math.max(8,size*0.22),height:Math.max(8,size*0.22),background:'#2ecc71',border:'2px solid #0B1D34',borderRadius:'50%'}}/>}
+    {editable&&<div aria-hidden="true" style={{position:'absolute',bottom:-2,right:-2,width:Math.max(16,size*0.32),height:Math.max(16,size*0.32),borderRadius:'50%',background:'var(--t)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:Math.max(8,size*0.18)+'px',boxShadow:'0 2px 6px rgba(0,0,0,.2)',border:'2px solid #fff',pointerEvents:'none'}}>📷</div>}
+    {editable&&<input ref={inputRef} type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={handlePick}/>}
+  </div>);
+}
+
 function LoginPage({onLogin}){
+  const{switchUser,toast,teamMembers}=useContext(Ctx);
   const[email,setEmail]=useState('dr.martin@vetcopilot.fr');
   const[pw,setPw]=useState('');
   const[loading,setLoading]=useState(false);
   const[showPw,setShowPw]=useState(false);
   const handleLogin=(e)=>{e.preventDefault();setLoading(true);setTimeout(()=>{setLoading(false);onLogin();},1200);};
+  const quickLogin=(member)=>{
+    switchUser(member.id);
+    setEmail(member.email);
+    toast(`Connexion en cours — ${teamMemberFullName(member)}...`,'tl');
+    setLoading(true);
+    setTimeout(()=>{setLoading(false);onLogin();},800);
+  };
   return(
     <div className="login-page">
       <div className="login-left af">
@@ -1000,7 +1107,30 @@ function LoginPage({onLogin}){
       <div className="login-right af1">
         <div className="login-card">
           <h2 style={{fontFamily:'var(--fh)',fontSize:'1.5rem',marginBottom:4,color:'#0B1D34'}}>Connexion</h2>
-          <p style={{fontSize:'.84rem',color:'#8C98A6',marginBottom:24}}>Accédez à votre espace VetCopilot</p>
+          <p style={{fontSize:'.84rem',color:'#8C98A6',marginBottom:18}}>Accédez à votre espace VetCopilot</p>
+
+          {/* Quick-login profiles */}
+          <div style={{fontSize:'.68rem',fontWeight:700,color:'#8C98A6',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:10}}>Connexion rapide</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,marginBottom:18}}>
+            {teamMembers.map(m=>(
+              <div key={m.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',border:'1px solid #E9ECF1',borderRadius:12,background:'#fff',cursor:'pointer',transition:'all .15s'}}
+                onClick={()=>quickLogin(m)}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor='var(--t)';e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 4px 12px rgba(11,29,52,.06)';}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor='#E9ECF1';e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none';}}>
+                <div onClick={e=>e.stopPropagation()}><UserAvatar member={m} size={36} editable/></div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:'.82rem',fontWeight:600,color:'#0B1D34',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{teamMemberFullName(m)}</div>
+                  <div style={{fontSize:'.7rem',color:'#8C98A6',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m.role}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:10,margin:'4px 0 16px'}}>
+            <div style={{flex:1,height:1,background:'#E9ECF1'}}/>
+            <div style={{fontSize:'.7rem',color:'#8C98A6',textTransform:'uppercase',letterSpacing:'.08em'}}>ou</div>
+            <div style={{flex:1,height:1,background:'#E9ECF1'}}/>
+          </div>
+
           <form onSubmit={handleLogin}>
             <div className="fg">
               <label className="fl" style={{color:'#0B1D34'}}>Adresse email</label>
@@ -1038,7 +1168,8 @@ function LoginPage({onLogin}){
 
 // ===== SIDEBAR =====
 function Sidebar({open,onClose}){
-  const{page,nav}=useContext(Ctx);
+  const{page,nav,currentUserId,teamMembers}=useContext(Ctx);
+  const me=teamMembers.find(m=>m.id===currentUserId)||teamMembers[0];
   const items=[
     {s:'Principal'},
     {k:'dashboard',ic:<I.Dash/>,l:'Tableau de bord'},
@@ -1048,6 +1179,7 @@ function Sidebar({open,onClose}){
     {k:'diagnostic',ic:<I.Brain/>,l:'Assistant diagnostic'},
     {k:'reports',ic:<I.File/>,l:'Comptes rendus',b:3,bt:'tl'},
     {s:'Gestion'},
+    {k:'team',ic:<I.User/>,l:'Équipe'},
     {k:'billing',ic:<I.Euro/>,l:'Facturation'},
     {k:'subscription',ic:<I.Zap/>,l:'Mon abonnement'},
     {s:'Outils'},
@@ -1070,8 +1202,8 @@ function Sidebar({open,onClose}){
       </nav>
       <div className="sb-div"/>
       <div className="sb-user">
-        <div className="sb-avatar">JM</div>
-        <div style={{flex:1,minWidth:0}}><div className="sb-uname">Dr. Jean Martin</div><div className="sb-urole">Vétérinaire principal</div></div>
+        <UserAvatar member={me} size={36} editable online/>
+        <div style={{flex:1,minWidth:0}}><div className="sb-uname">{teamMemberFullName(me)}</div><div className="sb-urole">{me.role}</div></div>
         <button className="btn-ghost btn-icon" onClick={()=>nav('login')} title="Déconnexion" style={{color:'rgba(255,255,255,.4)'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
       </div>
     </aside>
@@ -1407,10 +1539,67 @@ function Modal(){
             </div>
           </>}
           {modal.type==='photoLink'&&<PhotoLinkModal url={modal.url} animalNm={modal.animalNm}/>}
+          {modal.type==='newMember'&&<NewMemberForm/>}
         </div>
       </div>
     </div>
   );
+}
+
+function NewMemberForm(){
+  const{addTeamMember,setModal,toast}=useContext(Ctx);
+  const[firstName,setFirstName]=useState('');
+  const[lastName,setLastName]=useState('');
+  const[role,setRole]=useState('Vétérinaire');
+  const[email,setEmail]=useState('');
+  const[phone,setPhone]=useState('');
+  const[specialty,setSpecialty]=useState('');
+  const[status,setStatus]=useState('active');
+  const COLORS=['#2BA08F','#C8A45C','#9b59b6','#3498db','#e67e22','#16a34a'];
+  const submit=(e)=>{
+    e&&e.preventDefault&&e.preventDefault();
+    if(!firstName.trim()||!lastName.trim()||!email.trim()){toast('Prénom, nom et email requis','r');return;}
+    addTeamMember({
+      firstName:firstName.trim(),lastName:lastName.trim(),role,
+      email:email.trim(),phone:phone.trim()||'—',specialty:specialty.trim(),
+      status,color:COLORS[Math.floor(Math.random()*COLORS.length)],
+    });
+    setModal(null);
+    toast(`${firstName} ${lastName} ajouté à l'équipe`,'tl');
+  };
+  return(<form onSubmit={submit}>
+    <div className="g2">
+      <div className="fg"><label className="fl">Prénom</label><input className="fi" value={firstName} onChange={e=>setFirstName(e.target.value)} placeholder="Ex: Camille" required/></div>
+      <div className="fg"><label className="fl">Nom</label><input className="fi" value={lastName} onChange={e=>setLastName(e.target.value)} placeholder="Ex: Robert" required/></div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Rôle</label>
+        <select className="fi fi-sel" value={role} onChange={e=>setRole(e.target.value)}>
+          <option>Vétérinaire</option>
+          <option>Vétérinaire principal</option>
+          <option>ASV</option>
+          <option>Secrétaire</option>
+          <option>Admin</option>
+        </select>
+      </div>
+      <div className="fg"><label className="fl">Statut</label>
+        <select className="fi fi-sel" value={status} onChange={e=>setStatus(e.target.value)}>
+          <option value="active">En service</option>
+          <option value="off">Absent</option>
+          <option value="leave">En congé</option>
+        </select>
+      </div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Email</label><input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="prenom.nom@vetcopilot.fr" required/></div>
+      <div className="fg"><label className="fl">Téléphone</label><input className="fi" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="06 XX XX XX XX"/></div>
+    </div>
+    <div className="fg"><label className="fl">Spécialité (optionnel)</label><input className="fi" value={specialty} onChange={e=>setSpecialty(e.target.value)} placeholder="Ex: dermatologie, NAC"/></div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+      <button type="submit" className="btn btn-t"><I.Plus/> Ajouter</button>
+    </div>
+  </form>);
 }
 
 function PhotoLinkModal({url,animalNm}){
@@ -3004,7 +3193,43 @@ function Billing(){
   </div>);
 }
 
-// ===== SUBSCRIPTION =====
+// ===== TEAM =====
+function Team(){
+  const{teamMembers,addTeamMember,currentUserId,switchUser,toast,setModal}=useContext(Ctx);
+  const openAdd=()=>setModal({type:'newMember',title:'Ajouter un membre'});
+  return(<div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
+      <div>
+        <div style={{fontSize:'.74rem',color:'var(--txt2)',marginBottom:2}}>Clinique VetCopilot</div>
+        <div style={{fontFamily:'var(--fh)',fontSize:'1.2rem',fontWeight:700,color:'var(--txt)'}}>{teamMembers.length} membre{teamMembers.length>1?'s':''}</div>
+      </div>
+      <button className="btn btn-t" onClick={openAdd}><I.Plus/> Ajouter un membre</button>
+    </div>
+    <div className="stats af" style={{gridTemplateColumns:'repeat(auto-fit,minmax(290px,1fr))'}}>
+      {teamMembers.map(m=>{
+        const isMe=m.id===currentUserId;
+        const meta=TEAM_STATUS_META[m.status]||TEAM_STATUS_META.active;
+        return(<div key={m.id} className="c" style={{padding:18,position:'relative'}}>
+          {isMe&&<span className="tag tag-t" style={{position:'absolute',top:12,right:12,fontSize:'.66rem'}}>Moi</span>}
+          <div style={{display:'flex',gap:14,marginBottom:14}}>
+            <UserAvatar member={m} size={60} editable/>
+            <div style={{flex:1,minWidth:0,paddingTop:2}}>
+              <div style={{fontFamily:'var(--fh)',fontSize:'1rem',fontWeight:700,color:'var(--txt)'}}>{teamMemberFullName(m)}</div>
+              <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:2}}>{m.role}</div>
+              <span style={{display:'inline-block',marginTop:6,padding:'2px 9px',borderRadius:10,fontSize:'.66rem',fontWeight:700,background:meta.bg,color:meta.color}}>{meta.label}</span>
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr',gap:6,fontSize:'.8rem'}}>
+            <a href={`mailto:${m.email}`} style={{color:'var(--txt2)',textDecoration:'none',display:'flex',gap:8,alignItems:'center'}} onClick={e=>e.stopPropagation()}><I.Mail/><span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.email}</span></a>
+            <a href={`tel:${m.phone.replace(/\s/g,'')}`} style={{color:'var(--txt2)',textDecoration:'none',display:'flex',gap:8,alignItems:'center'}} onClick={e=>e.stopPropagation()}><I.Phone/>{m.phone}</a>
+            {m.specialty&&<div style={{color:'var(--txt2)',display:'flex',gap:8,alignItems:'center'}}><I.Steth/><span>{m.specialty}</span></div>}
+          </div>
+          {!isMe&&<button className="btn btn-sm btn-o" style={{marginTop:14,width:'100%',justifyContent:'center'}} onClick={()=>{switchUser(m.id);toast(`Connecté en tant que ${teamMemberFullName(m)}`,'tl');}}>Se connecter en tant que {m.firstName}</button>}
+        </div>);
+      })}
+    </div>
+  </div>);
+}
 const FEATURE_META={
   diagnostic:    {label:'Diagnostic IA',       ic:'🧠',color:'#2BA08F'},
   soap:          {label:'Comptes rendus SOAP', ic:'📋',color:'#0B1D34'},
