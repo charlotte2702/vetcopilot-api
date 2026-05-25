@@ -1996,7 +1996,7 @@ function AnimalDetail(){
       const r=await fetch(`/api/animals/${a.id}/photo-link`,{method:'POST'});
       const d=await r.json();
       if(!r.ok||!d.ok) throw new Error(d&&d.error||'échec génération lien');
-      const url=`${window.location.origin}${d.path}`;
+      const url=d.url||`${window.location.origin}${d.path}`;
       setModal({type:'photoLink',title:'Demande de photo',animalNm:a.nm,animalId:a.id,url});
     }catch(err){toast(`Erreur : ${err.message||err}`,'r');}
     finally{setReqLinkBusy(false);}
