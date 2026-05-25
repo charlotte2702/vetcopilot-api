@@ -804,6 +804,33 @@ function App(){
   // Chat lives in App() so the conversation persists across page navigation.
   const[chatMessages,setChatMessages]=useState([]);
   const[chatSending,setChatSending]=useState(false);
+  // Invoices live in App() so the Billing page state survives navigation and
+  // SOAP validation can push a draft invoice into the same array. Initial
+  // load fetches from /api/invoices, with the static `INVOICES` const as a
+  // tiny fallback while the request is in flight.
+  const[invoices,setInvoices]=useState([]);
+  const[invoicesLoading,setInvoicesLoading]=useState(true);
+  useEffect(()=>{
+    let cancelled=false;
+    fetch('/api/invoices').then(r=>r.json()).then(d=>{
+      if(cancelled) return;
+      if(d&&d.ok&&Array.isArray(d.invoices)) setInvoices(d.invoices);
+      setInvoicesLoading(false);
+    }).catch(()=>{ if(!cancelled) setInvoicesLoading(false); });
+    return()=>{cancelled=true;};
+  },[]);
+  const addInvoice=useCallback((inv)=>{
+    setInvoices(prev=>prev.some(p=>p.id===inv.id)?prev:[inv,...prev]);
+  },[]);
+  const updateInvoiceStatus=useCallback((id,nextStatus)=>{
+    setInvoices(prev=>prev.map(i=>i.id===id?{...i,status:nextStatus}:i));
+    // Fire-and-forget server sync — keeps INVOICES_STATE in sync for future GET requests.
+    fetch(`/api/invoices/${encodeURIComponent(id)}/status`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({status:nextStatus})
+    }).catch(()=>{});
+  },[]);
+
   // Animal photos: { [animalId]: dataUrl }. Persisted in localStorage so a
   // refresh doesn't wipe the photos. Mocked data layer for now — easy to swap
   // for a real backend endpoint later.
@@ -888,7 +915,7 @@ function App(){
   if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus}}>
       <div className={`app${IS_EMBED?' embed':''}`}>
         {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
         <main className="main">
@@ -1475,12 +1502,31 @@ function Dashboard(){
 
 // ===== CONSULTATION FLOW (5 steps now) =====
 function ConsultationFlow(){
-  const{nav,toast,setModal}=useContext(Ctx);
+  const{nav,toast,setModal,addInvoice}=useContext(Ctx);
   const[step,setStep]=useState(0);
   const[anId,setAnId]=useState(1);
   const[symptoms,setSymptoms]=useState('');
   const[notes,setNotes]=useState('');
   const[diagResult,setDiagResult]=useState(null);
+  const finishConsultation=useCallback(()=>{
+    const an=ANIMALS.find(a=>a.id===anId)||ANIMALS[0];
+    const d=new Date();
+    const pad=n=>String(n).padStart(2,'0');
+    const isoDate=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const draftId=`${d.getFullYear()}-${String(Math.floor(Math.random()*900)+100)}`;
+    const actes=[{nm:'Consultation générale',qty:1,price:45}];
+    if(diagResult&&Array.isArray(diagResult.hypotheses)&&diagResult.hypotheses.length){
+      actes.push({nm:'Examen clinique complet',qty:1,price:25});
+    }
+    const total=actes.reduce((s,a)=>s+(a.qty||1)*a.price,0);
+    const draft={
+      id:draftId,date:isoDate,animal:an.nm,client:an.owner||'Propriétaire',
+      animalId:an.id,status:'pending',actes,total,vet:'Dr. Martin'
+    };
+    if(addInvoice) addInvoice(draft);
+    toast(`Consultation terminée — facture brouillon ${draftId} créée`,'tl');
+    nav('dashboard');
+  },[anId,diagResult,addInvoice,toast,nav]);
   const dictCons=useDictation();
   const toggleConsMic=()=>{
     if(dictCons.recording){dictCons.stop();return;}
@@ -1557,7 +1603,7 @@ function ConsultationFlow(){
     </div>}
 
     {step===4&&<div className="af1" style={{maxWidth:700}}>
-      <ReportInline animalId={anId} symptoms={symptoms} notes={notes} diagResult={diagResult} onFinish={()=>{toast('Consultation terminée et CR enregistré','tl');nav('dashboard');}}/>
+      <ReportInline animalId={anId} symptoms={symptoms} notes={notes} diagResult={diagResult} onFinish={finishConsultation}/>
     </div>}
   </div>);
 }
@@ -2615,65 +2661,212 @@ function Reports(){
 
 // ===== BILLING =====
 function Billing(){
-  const{toast,setModal}=useContext(Ctx);
-  const[tab,setTab]=useState('invoices');
-  const totalCA=INVOICES.reduce((s,i)=>s+i.total,0);
-  const paid=INVOICES.filter(i=>i.status==='paid').reduce((s,i)=>s+i.total,0);
-  const pending=INVOICES.filter(i=>i.status!=='paid').reduce((s,i)=>s+i.total,0);
+  const{toast,invoices,invoicesLoading,updateInvoiceStatus}=useContext(Ctx);
+  const[periodFilter,setPeriodFilter]=useState('all'); // today | week | month | all
+  const[statusFilter,setStatusFilter]=useState('all'); // all | paid | pending | overdue
+  const[query,setQuery]=useState('');
+  const chartRef=useRef(null);
+  const chartInst=useRef(null);
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+
+  // --- Time helpers ----------------------------------------------------------
+  const today=new Date(); today.setHours(0,0,0,0);
+  const dayOf=(iso)=>{
+    if(!iso) return null;
+    const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if(m) return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+    // Try DD/MM/YYYY too (legacy fallback)
+    const m2=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(iso);
+    if(m2) return new Date(Number(m2[3]),Number(m2[2])-1,Number(m2[1]));
+    return null;
+  };
+  const inPeriod=(d,period)=>{
+    if(!d) return false;
+    if(period==='all') return true;
+    const dt=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+    if(period==='today') return dt.getTime()===today.getTime();
+    if(period==='week'){
+      const start=new Date(today); start.setDate(today.getDate()-6);
+      return dt>=start&&dt<=today;
+    }
+    if(period==='month'){
+      return dt.getFullYear()===today.getFullYear()&&dt.getMonth()===today.getMonth();
+    }
+    return true;
+  };
+  const fmtDate=(iso)=>{
+    const d=dayOf(iso);
+    if(!d) return iso||'';
+    return d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});
+  };
+
+  // --- Derived data ----------------------------------------------------------
+  const enriched=(invoices||[]).map(i=>({...i,_date:dayOf(i.date)}));
+  const caToday=enriched.filter(i=>inPeriod(i._date,'today')).reduce((s,i)=>s+(i.total||0),0);
+  const caWeek =enriched.filter(i=>inPeriod(i._date,'week')) .reduce((s,i)=>s+(i.total||0),0);
+  const caMonth=enriched.filter(i=>inPeriod(i._date,'month')).reduce((s,i)=>s+(i.total||0),0);
+  const nbPending=enriched.filter(i=>i.status==='pending'||i.status==='overdue').length;
+
+  // --- Filtering -------------------------------------------------------------
+  const q=query.trim().toLowerCase();
+  const filtered=enriched.filter(i=>{
+    if(!inPeriod(i._date,periodFilter)) return false;
+    if(statusFilter!=='all'&&i.status!==statusFilter) return false;
+    if(q&&!(`${i.animal||''} ${i.client||''} ${i.id||''}`.toLowerCase().includes(q))) return false;
+    return true;
+  }).sort((a,b)=>(b._date?b._date.getTime():0)-(a._date?a._date.getTime():0));
+
+  // --- Weekly CA chart -------------------------------------------------------
+  useEffect(()=>{
+    if(!chartRef.current||invoicesLoading) return;
+    const monthInv=enriched.filter(i=>inPeriod(i._date,'month'));
+    const buckets=[0,0,0,0,0]; // 5 buckets (some months span 5 weeks of the calendar)
+    monthInv.forEach(i=>{
+      if(!i._date) return;
+      const day=i._date.getDate();
+      const idx=Math.min(4,Math.floor((day-1)/7));
+      buckets[idx]+=i.total||0;
+    });
+    // Drop the 5th bucket if empty
+    const data=buckets[4]===0?buckets.slice(0,4):buckets;
+    const labels=data.map((_,i)=>`Semaine ${i+1}`);
+    chartInst.current?.destroy();
+    const txtC=isDark?'#6B7B8D':'#8C98A6';
+    const gridC=isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.04)';
+    chartInst.current=new Chart(chartRef.current,{
+      type:'bar',
+      data:{labels,datasets:[{label:'CA (€)',data,backgroundColor:'rgba(43,160,143,.7)',borderRadius:8,maxBarThickness:48}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.parsed.y.toFixed(2)} €`}}},scales:{y:{grid:{color:gridC},beginAtZero:true,ticks:{color:txtC,callback:v=>v+' €'}},x:{grid:{display:false},ticks:{color:txtC}}}}
+    });
+    return()=>{chartInst.current?.destroy();chartInst.current=null;};
+  // eslint-disable-next-line
+  },[invoices,invoicesLoading,isDark]);
+
+  // --- PDF export ------------------------------------------------------------
+  const exportInvoice=async(inv)=>{
+    try{
+      await downloadPdf({
+        url:`/api/invoices/${encodeURIComponent(inv.id)}/export-pdf`,
+        body:{},
+        filename:`Facture_${safeFilename(inv.id)}_${safeFilename(inv.animal||'patient')}.pdf`
+      });
+      toast(`Facture ${inv.id} téléchargée`,'tl');
+    }catch(err){toast(`Export PDF échoué : ${err.message||err}`,'r');}
+  };
+  const togglePaid=(inv)=>{
+    const next=inv.status==='paid'?'pending':'paid';
+    updateInvoiceStatus(inv.id,next);
+    toast(`Facture ${inv.id} → ${next==='paid'?'Payée':'En attente'}`,'tl');
+  };
+
+  // --- UI bits ---------------------------------------------------------------
+  const StatusBadge=({status})=>{
+    const map={
+      paid:{bg:'rgba(39,174,96,.12)',c:'#16a34a',l:'Payé'},
+      pending:{bg:'rgba(230,126,34,.12)',c:'#e67e22',l:'En attente'},
+      overdue:{bg:'rgba(231,76,60,.12)',c:'#dc2626',l:'En retard'},
+    };
+    const s=map[status]||map.pending;
+    return <span style={{background:s.bg,color:s.c,padding:'3px 10px',borderRadius:11,fontSize:'.72rem',fontWeight:700,whiteSpace:'nowrap'}}>{s.l}</span>;
+  };
+  const PeriodPill=({value,label})=>(
+    <button className={`tab ${periodFilter===value?'on':''}`} style={{padding:'7px 14px',fontSize:'.78rem'}} onClick={()=>setPeriodFilter(value)}>{label}</button>
+  );
+  const StatusPill=({value,label,color})=>(
+    <button onClick={()=>setStatusFilter(value)} style={{padding:'6px 12px',borderRadius:18,border:`1px solid ${statusFilter===value?color:'var(--lg)'}`,background:statusFilter===value?color:'transparent',color:statusFilter===value?'#fff':color,fontSize:'.76rem',fontWeight:600,cursor:'pointer',transition:'all .15s'}}>{label}</button>
+  );
+  const actesPreview=(actes)=>{
+    if(!actes||!actes.length) return '—';
+    const first=actes[0].nm||'Acte';
+    const rest=actes.length-1;
+    return rest>0?`${first} +${rest}`:first;
+  };
+
   return(<div>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
-      <div className="tabs" style={{marginBottom:0,maxWidth:350}}>
-        <button className={`tab ${tab==='invoices'?'on':''}`} onClick={()=>setTab('invoices')}>Factures</button>
-        <button className={`tab ${tab==='overview'?'on':''}`} onClick={()=>setTab('overview')}>Vue d'ensemble</button>
+    {/* STAT CARDS */}
+    <div className="stats af" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:16}}>
+      <div className="c stat"><div style={{display:'flex',alignItems:'center',gap:12,width:'100%'}}>
+        <div style={{width:42,height:42,borderRadius:11,background:'rgba(43,160,143,.12)',color:'var(--t)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:'1.3rem'}}>📅</div>
+        <div><div className="stat-v" style={{color:'var(--t)'}}>{caToday.toFixed(0)} €</div><div className="stat-l">CA du jour</div></div>
+      </div></div>
+      <div className="c stat"><div style={{display:'flex',alignItems:'center',gap:12,width:'100%'}}>
+        <div style={{width:42,height:42,borderRadius:11,background:'rgba(200,164,92,.12)',color:'var(--g)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:'1.3rem'}}>📊</div>
+        <div><div className="stat-v" style={{color:'var(--g)'}}>{caWeek.toFixed(0)} €</div><div className="stat-l">CA semaine</div></div>
+      </div></div>
+      <div className="c stat"><div style={{display:'flex',alignItems:'center',gap:12,width:'100%'}}>
+        <div style={{width:42,height:42,borderRadius:11,background:'rgba(11,29,52,.08)',color:'var(--txt)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:'1.3rem'}}>💼</div>
+        <div><div className="stat-v" style={{color:'var(--txt)'}}>{caMonth.toFixed(0)} €</div><div className="stat-l">CA du mois</div></div>
+      </div></div>
+      <div className="c stat"><div style={{display:'flex',alignItems:'center',gap:12,width:'100%'}}>
+        <div style={{width:42,height:42,borderRadius:11,background:'rgba(231,76,60,.12)',color:'#e74c3c',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:'1.3rem'}}>⏳</div>
+        <div><div className="stat-v" style={{color:'#e74c3c'}}>{nbPending}</div><div className="stat-l">{nbPending>1?'factures en attente':'facture en attente'}</div></div>
+      </div></div>
+    </div>
+
+    {/* CHART */}
+    <div className="c af" style={{marginBottom:16}}>
+      <div className="c-title" style={{marginBottom:10}}>Chiffre d'affaires hebdomadaire — {today.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</div>
+      <div style={{position:'relative',height:200}}><canvas ref={chartRef}/></div>
+    </div>
+
+    {/* FILTERS */}
+    <div className="c af" style={{marginBottom:14,padding:'14px 18px'}}>
+      <div style={{display:'flex',gap:18,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          <span style={{fontSize:'.7rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginRight:4}}>Période</span>
+          <div className="tabs" style={{marginBottom:0,display:'inline-flex'}}>
+            <PeriodPill value="today" label="Aujourd'hui"/>
+            <PeriodPill value="week"  label="Semaine"/>
+            <PeriodPill value="month" label="Mois"/>
+            <PeriodPill value="all"   label="Tout"/>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          <span style={{fontSize:'.7rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginRight:4}}>Statut</span>
+          <StatusPill value="all"     label="Tous"       color="var(--t)"/>
+          <StatusPill value="paid"    label="Payé"       color="#16a34a"/>
+          <StatusPill value="pending" label="En attente" color="#e67e22"/>
+          <StatusPill value="overdue" label="En retard"  color="#dc2626"/>
+        </div>
+        <div style={{flex:1,minWidth:200}}>
+          <input className="fi" type="text" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Rechercher animal ou propriétaire..." style={{height:36,fontSize:'.84rem'}}/>
+        </div>
       </div>
-      <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouvelle facture',type:'newInvoice'})}><I.Plus/> Nouvelle facture</button>
     </div>
 
-    <div className="stats af" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
-      <div className="c stat"><div><div className="stat-v" style={{color:'var(--t)'}}>{totalCA.toFixed(0)} €</div><div className="stat-l">CA total (mai)</div></div></div>
-      <div className="c stat"><div><div className="stat-v" style={{color:'#27ae60'}}>{paid.toFixed(0)} €</div><div className="stat-l">Encaissé</div></div></div>
-      <div className="c stat"><div><div className="stat-v" style={{color:'#e74c3c'}}>{pending.toFixed(0)} €</div><div className="stat-l">En attente</div></div></div>
-    </div>
-
-    {tab==='invoices'&&<div className="c af1" style={{padding:0,overflow:'auto'}}>
-      <table className="tbl"><thead><tr><th>N° Facture</th><th>Client</th><th>Animal</th><th>Date</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead>
-        <tbody>{INVOICES.map(inv=>(
+    {/* TABLE */}
+    <div className="c af1" style={{padding:0,overflow:'auto'}}>
+      {invoicesLoading?<div style={{padding:50,textAlign:'center',color:'var(--txt2)'}}>Chargement des factures...</div>
+      :filtered.length===0?<div style={{padding:50,textAlign:'center',color:'var(--txt2)'}}>Aucune facture ne correspond aux filtres.</div>
+      :<table className="tbl">
+        <thead><tr>
+          <th style={{width:90}}>N° Facture</th>
+          <th style={{width:90}}>Date</th>
+          <th>Animal</th>
+          <th>Propriétaire</th>
+          <th>Actes</th>
+          <th style={{width:90,textAlign:'right'}}>Montant</th>
+          <th style={{width:110}}>Statut</th>
+          <th style={{width:130}}>Actions</th>
+        </tr></thead>
+        <tbody>{filtered.map(inv=>(
           <tr key={inv.id}>
-            <td><span style={{fontWeight:600}}>#{inv.id}</span></td>
-            <td>{inv.client}</td><td>{inv.animal}</td><td>{inv.date}</td>
-            <td style={{fontWeight:700}}>{inv.total.toFixed(2)} €</td>
-            <td><span className={`tag ${inv.status==='paid'?'tag-t':inv.status==='pending'?'tag-g':'tag-r'}`}>{stL[inv.status]}</span></td>
+            <td><span style={{fontWeight:700,fontFamily:'var(--fh)',fontSize:'.82rem',color:'var(--txt)'}}>{inv.id}</span></td>
+            <td style={{fontSize:'.82rem',color:'var(--txt2)'}}>{fmtDate(inv.date)}</td>
+            <td><span style={{fontWeight:600,color:'var(--txt)'}}>{inv.animal||'—'}</span></td>
+            <td style={{fontSize:'.84rem'}}>{inv.client||'—'}</td>
+            <td style={{fontSize:'.78rem',color:'var(--txt2)'}} title={(inv.actes||[]).map(a=>a.nm).join(', ')}>{actesPreview(inv.actes)}</td>
+            <td style={{fontWeight:700,textAlign:'right',color:'var(--txt)'}}>{(inv.total||0).toFixed(2)} €</td>
+            <td><StatusBadge status={inv.status}/></td>
             <td><div style={{display:'flex',gap:4}}>
-              <button className="btn btn-sm btn-ghost"><I.Eye/></button>
-              <button className="btn btn-sm btn-ghost"><I.Print/></button>
-              <button className="btn btn-sm btn-ghost"><I.Mail/></button>
-              {inv.status!=='paid'&&<button className="btn btn-sm btn-t" onClick={()=>toast(`Facture #${inv.id} marquée payée`,'tl')}><I.Check/></button>}
+              <button className="btn btn-sm btn-ghost" onClick={()=>togglePaid(inv)} title={inv.status==='paid'?'Marquer en attente':'Marquer payée'}>{inv.status==='paid'?<I.X/>:<I.Check/>}</button>
+              <button className="btn btn-sm btn-ghost" onClick={()=>exportInvoice(inv)} title="Télécharger PDF"><I.Down/></button>
             </div></td>
           </tr>
         ))}</tbody>
-      </table>
-    </div>}
-    {tab==='overview'&&<div className="g2 af1">
-      <div className="c"><div className="c-title" style={{marginBottom:14}}>Répartition des paiements</div>
-        <div style={{display:'flex',flexDirection:'column',gap:10}}>
-          {[{l:'Consultations',v:45,c:'var(--t)'},{l:'Chirurgies',v:30,c:'var(--g)'},{l:'Médicaments',v:15,c:'#9b59b6'},{l:'Vaccinations',v:10,c:'#3498db'}].map((s,i)=>(
-            <div key={i}>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:'.82rem',marginBottom:4}}><span style={{color:'var(--txt)'}}>{s.l}</span><span style={{fontWeight:700,color:s.c}}>{s.v}%</span></div>
-              <div className="stock-bar"><div className="stock-fill" style={{width:`${s.v}%`,background:s.c}}/></div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="c"><div className="c-title" style={{marginBottom:14}}>Derniers paiements</div>
-        {INVOICES.filter(i=>i.status==='paid').map((inv,i)=>(
-          <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:i<2?'1px solid var(--bg)':'none'}}>
-            <div style={{width:32,height:32,borderRadius:8,background:'rgba(39,174,96,.08)',display:'flex',alignItems:'center',justifyContent:'center',color:'#27ae60'}}><I.Check/></div>
-            <div style={{flex:1}}><div style={{fontSize:'.84rem',fontWeight:500,color:'var(--txt)'}}>{inv.client} — {inv.animal}</div><div style={{fontSize:'.72rem',color:'var(--txt2)'}}>{inv.date}</div></div>
-            <span style={{fontWeight:700,color:'#27ae60',fontSize:'.9rem'}}>{inv.total.toFixed(2)} €</span>
-          </div>
-        ))}
-      </div>
-    </div>}
+      </table>}
+    </div>
+    {!invoicesLoading&&filtered.length>0&&<div style={{padding:'10px 4px',fontSize:'.74rem',color:'var(--txt2)',textAlign:'right'}}>{filtered.length} facture{filtered.length>1?'s':''} affichée{filtered.length>1?'s':''}</div>}
   </div>);
 }
 
