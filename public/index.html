@@ -992,38 +992,42 @@ function App(){
   const nav=useCallback((p,d)=>{setPage(p);if(d)setSelAnimal(d);setSbOpen(false);setNotifOpen(false);setSearchOpen(false);window.scrollTo({top:0,behavior:'smooth'});},[]);
   const toast=useCallback((msg,type='tl')=>{const id=Date.now();setToasts(p=>[...p,{id,msg,type}]);setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),4200);},[]);
 
-  if(!IS_EMBED&&page==='login') return <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />;
+  const showLogin = !IS_EMBED && page === 'login';
 
   return(
     <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember}}>
-      <div className={`app${IS_EMBED?' embed':''}`}>
-        {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
-        <main className="main">
-          {!IS_EMBED&&<Header onMenu={()=>setSbOpen(!sbOpen)}/>}
-          <div className="page">
-            {page==='dashboard'&&<Dashboard/>}
-            {page==='schedule'&&<Schedule/>}
-            {page==='animals'&&<Animals/>}
-            {page==='animal-detail'&&<AnimalDetail/>}
-            {page==='diagnostic'&&<Diagnostic/>}
-            {page==='reports'&&<Reports/>}
-            {page==='consultation'&&<ConsultationFlow/>}
-            {/* pharmacy removed */}
-            {page==='billing'&&<Billing/>}
-            {page==='team'&&<Team/>}
-            {page==='subscription'&&<Subscription/>}
-            {page==='stats'&&<Stats/>}
-            {page==='settings'&&<Settings/>}
-          </div>
-        </main>
-        {!IS_EMBED&&<MobileNav/>}
-        {!IS_EMBED&&<Chatbot/>}
-        {!IS_EMBED&&<NotifPanel/>}
-        {!IS_EMBED&&<ChatWidget/>}
-        {modal&&<Modal/>}
-        {searchOpen&&<SearchOverlay/>}
-        <div className="toast-container">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.type==='tl'?<I.Check/>:t.type==='r'?<I.Warn/>:<I.Bell/>}{t.msg}</div>)}</div>
-      </div>
+      {showLogin ? (
+        <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />
+      ) : (
+        <div className={`app${IS_EMBED?' embed':''}`}>
+          {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
+          <main className="main">
+            {!IS_EMBED&&<Header onMenu={()=>setSbOpen(!sbOpen)}/>}
+            <div className="page">
+              {page==='dashboard'&&<Dashboard/>}
+              {page==='schedule'&&<Schedule/>}
+              {page==='animals'&&<Animals/>}
+              {page==='animal-detail'&&<AnimalDetail/>}
+              {page==='diagnostic'&&<Diagnostic/>}
+              {page==='reports'&&<Reports/>}
+              {page==='consultation'&&<ConsultationFlow/>}
+              {/* pharmacy removed */}
+              {page==='billing'&&<Billing/>}
+              {page==='team'&&<Team/>}
+              {page==='subscription'&&<Subscription/>}
+              {page==='stats'&&<Stats/>}
+              {page==='settings'&&<Settings/>}
+            </div>
+          </main>
+          {!IS_EMBED&&<MobileNav/>}
+          {!IS_EMBED&&<Chatbot/>}
+          {!IS_EMBED&&<NotifPanel/>}
+          {!IS_EMBED&&<ChatWidget/>}
+          {modal&&<Modal/>}
+          {searchOpen&&<SearchOverlay/>}
+        </div>
+      )}
+      <div className="toast-container">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.type==='tl'?<I.Check/>:t.type==='r'?<I.Warn/>:<I.Bell/>}{t.msg}</div>)}</div>
     </Ctx.Provider>
   );
 }
