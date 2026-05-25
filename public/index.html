@@ -647,6 +647,39 @@ function formatArchiveDate(iso){
   try{return new Date(iso).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});}catch(_){return iso;}
 }
 
+// Mock medication catalog — used by the global search and emergency module.
+// Trimmed to ~20 staples; expand or back with an API later.
+const MEDS=[
+  {nm:'Cerenia',           dci:'Maropitant',     cls:'Antiémétique',   note:'1 mg/kg SC ou PO, 1×/j'},
+  {nm:'Oméprazole',        dci:'Oméprazole',     cls:'IPP',            note:'1 mg/kg PO, 1×/j'},
+  {nm:'Métoclopramide',    dci:'Métoclopramide', cls:'Antiémétique',   note:'0.2-0.5 mg/kg SC/IV, 2-3×/j'},
+  {nm:'Furosémide',        dci:'Furosémide',     cls:'Diurétique',     note:'1-4 mg/kg IV/IM/PO selon état'},
+  {nm:'Adrénaline',        dci:'Épinéphrine',    cls:'Urgence',        note:'0.01 mg/kg IV (1:10000) en RCP'},
+  {nm:'Atropine',          dci:'Sulfate d\'atropine', cls:'Urgence',   note:'0.04 mg/kg IV en bradycardie'},
+  {nm:'Diazépam',          dci:'Diazépam',       cls:'Anticonvulsivant',note:'0.5-1 mg/kg IV en bolus'},
+  {nm:'Méthadone',         dci:'Méthadone',      cls:'Opioïde',        note:'0.1-0.3 mg/kg IV/IM/SC'},
+  {nm:'Carprofène',        dci:'Carprofène',     cls:'AINS',           note:'4 mg/kg PO, 1×/j'},
+  {nm:'Meloxicam',         dci:'Meloxicam',      cls:'AINS',           note:'0.1 mg/kg PO, 1×/j entretien'},
+  {nm:'Tramadol',          dci:'Tramadol',       cls:'Analgésique',    note:'2-5 mg/kg PO, 2-3×/j'},
+  {nm:'Amoxicilline-clav.',dci:'Amox/clav.',     cls:'Antibiotique',   note:'12.5-25 mg/kg PO, 2×/j'},
+  {nm:'Marbocyl',          dci:'Marbofloxacine', cls:'Antibiotique',   note:'2 mg/kg PO, 1×/j'},
+  {nm:'Doxycycline',       dci:'Doxycycline',    cls:'Antibiotique',   note:'5-10 mg/kg PO, 1-2×/j'},
+  {nm:'Métronidazole',     dci:'Métronidazole',  cls:'Antibiotique',   note:'10-15 mg/kg PO, 2×/j'},
+  {nm:'Dexaméthasone',     dci:'Dexaméthasone',  cls:'Corticoïde',     note:'0.1-0.5 mg/kg IV/IM'},
+  {nm:'Prednisolone',      dci:'Prednisolone',   cls:'Corticoïde',     note:'0.5-2 mg/kg PO selon indication'},
+  {nm:'Pronefra',          dci:'Carbonate Ca',   cls:'IRC',            note:'1 ml/5kg PO, 2×/j'},
+  {nm:'Vermifuge Drontal', dci:'Praziquantel',   cls:'Antiparasitaire',note:'1 cp / 10 kg PO, dose unique'},
+  {nm:'Frontline',         dci:'Fipronil',       cls:'Antiparasitaire',note:'Spot-on selon poids, mensuel'},
+];
+
+// Vaccine reminder helpers — `dt` field on a.vacc is the NEXT due date
+// (DD/MM/YYYY), not the last dose. Used by dashboard + animal banner + notifs.
+function parseDDMMYYYY(s){const m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s||'');return m?new Date(Number(m[3]),Number(m[2])-1,Number(m[1])):null;}
+function daysUntilDate(d){if(!d) return null;return Math.round((d.getTime()-Date.now())/86400000);}
+function vaccDaysLeft(v){return daysUntilDate(parseDDMMYYYY(v.dt));}
+function vaccUrgency(v){const d=vaccDaysLeft(v);if(d===null) return null;if(d<0) return 'expired';if(d<=30) return 'soon';return 'ok';}
+function describeVaccDays(v){const d=vaccDaysLeft(v);if(d===null) return '';if(d<0) return `Expiré depuis ${Math.abs(d)} j`;if(d===0) return "Expire aujourd'hui";return `Expire dans ${d} j`;}
+
 const TEAM_STATUS_META={
   active:{label:'En service',color:'#16a34a',bg:'rgba(22,163,74,.12)'},
   off:   {label:'Absent',    color:'#e67e22',bg:'rgba(230,126,34,.12)'},
@@ -1047,6 +1080,25 @@ function App(){
     return()=>clearInterval(iv);
   },[addNotif,prefs.pushNotifs]);
 
+  // Vaccine expiry notifications — fire once per (animal, vaccine) tuple when
+  // expiry is ≤ 7 days. Skips archived animals. Gated by the same push pref.
+  const notifiedVaccsRef=useRef(new Set());
+  useEffect(()=>{
+    if(!prefs.vaccReminders) return;
+    ANIMALS.forEach(a=>{
+      if((archive||{})[a.id]) return;
+      (a.vacc||[]).forEach(v=>{
+        const d=vaccDaysLeft(v);
+        if(d===null||d>7) return;
+        const key=`vacc-${a.id}-${v.nm}`;
+        if(notifiedVaccsRef.current.has(key)) return;
+        notifiedVaccsRef.current.add(key);
+        const expired=d<0;
+        addNotif({id:key,type:'vacc',title:expired?`Vaccin expiré — ${a.nm}`:`Rappel vaccin imminent — ${a.nm}`,text:`${v.nm} · ${describeVaccDays(v)} (${v.dt})`,time:"À l'instant",unread:true});
+      });
+    });
+  },[addNotif,archive,prefs.vaccReminders]);
+
   const nav=useCallback((p,d)=>{setPage(p);if(d)setSelAnimal(d);setSbOpen(false);setNotifOpen(false);setSearchOpen(false);window.scrollTo({top:0,behavior:'smooth'});},[]);
   const toast=useCallback((msg,type='tl')=>{const id=Date.now();setToasts(p=>[...p,{id,msg,type}]);setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),4200);},[]);
 
@@ -1068,6 +1120,7 @@ function App(){
               {page==='animal-detail'&&<AnimalDetail/>}
               {page==='diagnostic'&&<Diagnostic/>}
               {page==='reports'&&<Reports/>}
+              {page==='emergencies'&&<Emergencies/>}
               {page==='consultation'&&<ConsultationFlow/>}
               {/* pharmacy removed */}
               {page==='billing'&&<Billing/>}
@@ -1288,6 +1341,7 @@ function Sidebar({open,onClose}){
     {s:'Intelligence IA'},
     {k:'diagnostic',ic:<I.Brain/>,l:'Assistant diagnostic'},
     {k:'reports',ic:<I.File/>,l:'Comptes rendus',b:3,bt:'tl'},
+    {k:'emergencies',ic:<span style={{display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#e74c3c'}}><I.Warn/></span>,l:'Urgences'},
     {s:'Gestion'},
     {k:'team',ic:<I.User/>,l:'Équipe'},
     {k:'billing',ic:<I.Euro/>,l:'Facturation'},
@@ -1357,41 +1411,121 @@ function Header({onMenu}){
 
 // ===== SEARCH OVERLAY =====
 function SearchOverlay(){
-  const{setSearchOpen,nav,archive}=useContext(Ctx);
+  const{setSearchOpen,nav,archive,teamMembers,manualActs,toast}=useContext(Ctx);
   const[q,setQ]=useState('');
   const[sel,setSel]=useState(0);
+
+  // Build a single flat list of indexable items across all categories.
   const allItems=useMemo(()=>{
     const items=[];
-    const archivedNames=new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm));
-    ANIMALS.filter(a=>!archive[a.id]).forEach(a=>items.push({type:'Patient',nm:`${a.nm} — ${a.sp} (${a.breed})`,em:Em[a.av],action:()=>nav('animal-detail',a)}));
-    items.push({type:'Page',nm:'Tableau de bord',em:'📊',action:()=>nav('dashboard')});
-    items.push({type:'Page',nm:'Agenda',em:'📅',action:()=>nav('schedule')});
-    items.push({type:'Page',nm:'Assistant diagnostic IA',em:'🧠',action:()=>nav('diagnostic')});
-    items.push({type:'Page',nm:'Comptes rendus',em:'📄',action:()=>nav('reports')});
-    items.push({type:'Page',nm:'Facturation',em:'💶',action:()=>nav('billing')});
-    items.push({type:'Page',nm:'Statistiques',em:'📈',action:()=>nav('stats')});
-    APTS.filter(a=>!archivedNames.has(a.nm)).forEach(a=>items.push({type:'RDV',nm:`${a.t} — ${a.nm} (${a.rsn})`,em:Em[a.av],action:()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);else nav('schedule');}}));
+    const archivedIds=new Set(Object.keys(archive||{}).map(Number));
+    const archivedNames=new Set(ANIMALS.filter(a=>archivedIds.has(a.id)).map(a=>a.nm));
+
+    // PATIENTS
+    ANIMALS.filter(a=>!archivedIds.has(a.id)).forEach(a=>items.push({
+      cat:'patients',type:'Patient',
+      nm:`${a.nm} — ${a.sp} (${a.breed})`,sub:`Propriétaire : ${a.owner}`,em:Em[a.av]||'🐾',
+      action:()=>nav('animal-detail',a),
+      search:`${a.nm} ${a.sp} ${a.breed} ${a.owner}`.toLowerCase(),
+    }));
+
+    // ÉQUIPE
+    (teamMembers||[]).forEach(m=>items.push({
+      cat:'team',type:'Équipe',
+      nm:teamMemberFullName(m),sub:`${m.role} · ${m.email}`,em:'👤',
+      action:()=>nav('team'),
+      search:`${m.firstName} ${m.lastName} ${m.role} ${m.email}`.toLowerCase(),
+    }));
+
+    // MÉDICAMENTS
+    MEDS.forEach(med=>items.push({
+      cat:'meds',type:'Médicament',
+      nm:`${med.nm}${med.dci&&med.dci!==med.nm?` (${med.dci})`:''}`,
+      sub:`${med.cls} · ${med.note}`,em:'💊',
+      action:()=>toast(`${med.nm} — ${med.note}`,'info'),
+      search:`${med.nm} ${med.dci} ${med.cls}`.toLowerCase(),
+    }));
+
+    // HISTORIQUE — manual acts across all animals
+    Object.entries(manualActs||{}).forEach(([animalId,acts])=>{
+      const animal=ANIMALS.find(a=>a.id===Number(animalId));
+      if(!animal||archivedIds.has(animal.id)) return;
+      acts.forEach(act=>items.push({
+        cat:'history',type:'Historique',
+        nm:`${act.type}${act.vaccineName?` — ${act.vaccineName}`:''} · ${animal.nm}`,
+        sub:`${act.dateDisplay} · ${act.vet}${act.notes?` · ${act.notes.slice(0,60)}`:''}`,
+        em:'📋',action:()=>nav('animal-detail',animal),
+        search:`${act.type} ${act.vaccineName||''} ${animal.nm} ${act.notes||''}`.toLowerCase(),
+      }));
+    });
+
+    // RDV
+    APTS.filter(a=>!archivedNames.has(a.nm)).forEach(a=>items.push({
+      cat:'rdv',type:'Rendez-vous',
+      nm:`${a.t} — ${a.nm}`,sub:`${a.rsn} · ${a.own}`,em:Em[a.av]||'📅',
+      action:()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);else nav('schedule');},
+      search:`${a.t} ${a.nm} ${a.rsn} ${a.own}`.toLowerCase(),
+    }));
+
+    // PAGES
+    [
+      {nm:'Tableau de bord',em:'📊',k:'dashboard'},
+      {nm:'Agenda',em:'📅',k:'schedule'},
+      {nm:'Dossiers patients',em:'🐾',k:'animals'},
+      {nm:'Assistant diagnostic IA',em:'🧠',k:'diagnostic'},
+      {nm:'Comptes rendus',em:'📄',k:'reports'},
+      {nm:'Urgences',em:'🚨',k:'emergencies'},
+      {nm:'Équipe',em:'👥',k:'team'},
+      {nm:'Facturation',em:'💶',k:'billing'},
+      {nm:'Mon abonnement',em:'⚡',k:'subscription'},
+      {nm:'Statistiques',em:'📈',k:'stats'},
+      {nm:'Paramètres',em:'⚙️',k:'settings'},
+    ].forEach(p=>items.push({cat:'pages',type:'Page',nm:p.nm,sub:'',em:p.em,action:()=>nav(p.k),search:p.nm.toLowerCase()}));
+
     return items;
-  },[archive]);
-  const filtered=q?allItems.filter(i=>i.nm.toLowerCase().includes(q.toLowerCase())||i.type.toLowerCase().includes(q.toLowerCase())):allItems.slice(0,8);
-  const handleKey=(e)=>{if(e.key==='ArrowDown')setSel(s=>Math.min(s+1,filtered.length-1));else if(e.key==='ArrowUp')setSel(s=>Math.max(s-1,0));else if(e.key==='Enter'&&filtered[sel]){filtered[sel].action();setSearchOpen(false);}else if(e.key==='Escape')setSearchOpen(false);};
+  },[archive,teamMembers,manualActs,nav,toast]);
+
+  // Filter + group by category for rendering
+  const qLc=q.trim().toLowerCase();
+  const filtered=qLc
+    ? allItems.filter(i=>i.search.includes(qLc))
+    : allItems.filter(i=>i.cat==='patients'||i.cat==='pages').slice(0,8);
+  const CAT_ORDER=['patients','team','meds','history','rdv','pages'];
+  const CAT_LABEL={patients:'Patients',team:'Équipe',meds:'Médicaments',history:'Historique',rdv:'Rendez-vous',pages:'Pages'};
+  const groups=CAT_ORDER.map(c=>({cat:c,label:CAT_LABEL[c],items:filtered.filter(i=>i.cat===c)})).filter(g=>g.items.length>0);
+  // Build a flat ordered list mirroring the rendered order — needed for ↑/↓ + Enter
+  const orderedFlat=groups.flatMap(g=>g.items);
+  const handleKey=(e)=>{
+    if(e.key==='ArrowDown'){e.preventDefault();setSel(s=>Math.min(s+1,orderedFlat.length-1));}
+    else if(e.key==='ArrowUp'){e.preventDefault();setSel(s=>Math.max(s-1,0));}
+    else if(e.key==='Enter'&&orderedFlat[sel]){orderedFlat[sel].action();setSearchOpen(false);}
+    else if(e.key==='Escape')setSearchOpen(false);
+  };
+
+  let flatIdx=-1;
   return(
     <div className="search-overlay" onClick={()=>setSearchOpen(false)}>
       <div className="search-box" onClick={e=>e.stopPropagation()}>
         <div style={{display:'flex',alignItems:'center',gap:10,padding:'0 18px'}}>
           <I.Search/>
-          <input autoFocus placeholder="Rechercher patients, pages, médicaments, RDV..." value={q} onChange={e=>{setQ(e.target.value);setSel(0);}} onKeyDown={handleKey}/>
+          <input autoFocus placeholder="Rechercher patients, équipe, médicaments, historique..." value={q} onChange={e=>{setQ(e.target.value);setSel(0);}} onKeyDown={handleKey}/>
           <button style={{fontSize:'.7rem',color:'var(--mg)',background:'var(--lg)',padding:'3px 8px',borderRadius:5,fontWeight:600,flexShrink:0}} onClick={()=>setSearchOpen(false)}>ESC</button>
         </div>
         <div className="search-results">
-          {filtered.map((item,i)=>(
-            <div key={i} className={`search-item ${i===sel?'sel':''}`} onClick={()=>{item.action();setSearchOpen(false);}} onMouseEnter={()=>setSel(i)}>
-              <span style={{fontSize:'1.1rem'}}>{item.em}</span>
-              <div style={{flex:1}}><div style={{fontSize:'.86rem',fontWeight:500}}>{item.nm}</div><div className="si-type">{item.type}</div></div>
-              <I.ChevR/>
-            </div>
-          ))}
-          {filtered.length===0&&<div style={{padding:'30px 22px',textAlign:'center',color:'var(--mg)',fontSize:'.86rem'}}>Aucun résultat pour "{q}"</div>}
+          {groups.length===0&&<div style={{padding:'30px 22px',textAlign:'center',color:'var(--mg)',fontSize:'.86rem'}}>Aucun résultat pour "{q}"</div>}
+          {groups.map(g=>(<div key={g.cat}>
+            <div style={{padding:'10px 22px 4px',fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.08em',background:'var(--bg)'}}>{g.label} <span style={{color:'var(--mg)',opacity:.7,marginLeft:4}}>({g.items.length})</span></div>
+            {g.items.map(item=>{flatIdx++;const myIdx=flatIdx;return(
+              <div key={`${g.cat}-${myIdx}`} className={`search-item ${myIdx===sel?'sel':''}`} onClick={()=>{item.action();setSearchOpen(false);}} onMouseEnter={()=>setSel(myIdx)}>
+                <span style={{fontSize:'1.2rem',width:24,textAlign:'center',flexShrink:0}}>{item.em}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:'.86rem',fontWeight:500,color:'var(--txt)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.nm}</div>
+                  {item.sub&&<div style={{fontSize:'.72rem',color:'var(--txt2)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:1}}>{item.sub}</div>}
+                </div>
+                <I.ChevR/>
+              </div>
+            );})}
+          </div>))}
         </div>
       </div>
     </div>
@@ -1653,7 +1787,7 @@ function Modal(){
           {modal.type==='photoLink'&&<PhotoLinkModal url={modal.url} animalNm={modal.animalNm}/>}
           {modal.type==='newMember'&&<NewMemberForm/>}
           {modal.type==='archive'&&<ArchiveAnimalForm animal={modal.animal}/>}
-          {modal.type==='quickAct'&&<QuickActForm animalId={modal.animalId}/>}
+          {modal.type==='quickAct'&&<QuickActForm animalId={modal.animalId} defaultType={modal.defaultType}/>}
         </div>
       </div>
     </div>
@@ -1665,13 +1799,13 @@ function isVaccinationType(t){return t==='Vaccination'||t==='Rappel vaccin';}
 function formatDateFR(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso||'');return m?`${m[3]}/${m[2]}/${m[1]}`:iso||'';}
 function addOneYearISO(iso){const d=new Date(iso);if(isNaN(d.getTime())) return '';d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);}
 
-function QuickActForm({animalId}){
+function QuickActForm({animalId,defaultType}){
   const{addManualAct,teamMembers,toast,setModal}=useContext(Ctx);
   const animal=ANIMALS.find(a=>a.id===animalId);
   const vets=(teamMembers||[]).filter(m=>m.role&&m.role.startsWith('Vétérinaire'));
   const todayISO=new Date().toISOString().slice(0,10);
   const[date,setDate]=useState(todayISO);
-  const[type,setType]=useState('Vaccination');
+  const[type,setType]=useState(ACT_TYPES_LIST.includes(defaultType)?defaultType:'Vaccination');
   const[vetId,setVetId]=useState(vets[0]?.id||1);
   const[notes,setNotes]=useState('');
   const[weight,setWeight]=useState('');
@@ -1914,6 +2048,51 @@ function PhotoLinkModal({url,animalNm}){
 }
 
 // ===== DASHBOARD =====
+function VaccineRemindersCard(){
+  const{nav,toast,archive}=useContext(Ctx);
+  // Walk active animals × their vaccines, keep only "soon" + "expired".
+  const reminders=useMemo(()=>{
+    const list=[];
+    ANIMALS.forEach(a=>{
+      if((archive||{})[a.id]) return;
+      (a.vacc||[]).forEach(v=>{
+        const u=vaccUrgency(v);
+        if(u==='soon'||u==='expired'){
+          list.push({animal:a,vacc:v,urgency:u,days:vaccDaysLeft(v)});
+        }
+      });
+    });
+    return list.sort((x,y)=>(x.days??99999)-(y.days??99999));
+  },[archive]);
+
+  if(reminders.length===0){
+    return(<div className="c af1">
+      <div className="c-title" style={{marginBottom:8}}>Rappels vaccins à venir</div>
+      <div style={{padding:'14px 0',textAlign:'center',color:'var(--txt2)',fontSize:'.84rem'}}>✅ Aucun vaccin à renouveler dans les 30 prochains jours.</div>
+    </div>);
+  }
+  return(<div className="c af1">
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+      <div className="c-title">💉 Rappels vaccins à venir <span style={{fontSize:'.74rem',color:'var(--txt2)',fontWeight:500,marginLeft:6}}>({reminders.length})</span></div>
+    </div>
+    {reminders.slice(0,5).map((r,i)=>{
+      const expired=r.urgency==='expired';
+      const color=expired?'#dc2626':'#e67e22';
+      const bg=expired?'rgba(220,38,38,.08)':'rgba(230,126,34,.08)';
+      return(<div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:i<Math.min(4,reminders.length-1)?'1px solid var(--bg)':'none',cursor:'pointer'}} onClick={()=>nav('animal-detail',r.animal)}>
+        <div className={`apt-av ${r.animal.av}`} style={{width:34,height:34,borderRadius:9,fontSize:'.9rem',flexShrink:0}}>{Em[r.animal.av]||'🐾'}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:'.86rem',fontWeight:600,color:'var(--txt)'}}>{r.animal.nm} <span style={{color:'var(--txt2)',fontWeight:400,fontSize:'.76rem'}}>· {r.animal.owner}</span></div>
+          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:1}}>{r.vacc.nm} · échéance {r.vacc.dt}</div>
+        </div>
+        <span style={{padding:'3px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700,background:bg,color,whiteSpace:'nowrap'}}>{expired?`Expiré (${Math.abs(r.days)} j)`:`${r.days} j`}</span>
+        <button className="btn btn-sm btn-o" style={{padding:'5px 10px'}} onClick={(e)=>{e.stopPropagation();toast(`Rappel envoyé à ${r.animal.owner}`,'tl');}}>Envoyer</button>
+      </div>);
+    })}
+    {reminders.length>5&&<div style={{marginTop:10,fontSize:'.74rem',color:'var(--txt2)',textAlign:'center'}}>+ {reminders.length-5} autre{reminders.length-5>1?'s':''} rappel{reminders.length-5>1?'s':''}</div>}
+  </div>);
+}
+
 function Dashboard(){
   const{nav,setModal,toast,archive}=useContext(Ctx);
   const chartRef=useRef(null);const chartInst=useRef(null);
@@ -1976,6 +2155,7 @@ function Dashboard(){
             </div>
           ))}
         </div>
+        <VaccineRemindersCard/>
         <div className="c af3">
           <div className="c-title" style={{marginBottom:12}}>Activité de la semaine</div>
           <div style={{height:200}}><canvas ref={chartRef}/></div>
@@ -2587,16 +2767,52 @@ function AnimalDetail(){
   // eslint-disable-next-line
   },[modal,a.id]);
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+
+  // 12-month weight series: the 5 known points (Jan-Mai) suffixed onto 7
+  // deterministic synthetic points (Juin-Déc of previous year), giving a
+  // year-long view. Deterministic ⇒ same chart on every render.
+  const weightSeries=useMemo(()=>{
+    const months=['Juin','Juil','Août','Sept','Oct','Nov','Déc','Jan','Fév','Mar','Avr','Mai'];
+    const base=a.wts.length?a.wts[0].v:1;
+    const synth=Array.from({length:7},(_,i)=>{
+      const v=base*(1+Math.sin((i+a.id*1.7)*0.8)*0.04+Math.cos((i+a.id)*0.5)*0.025);
+      return{m:months[i],v:Number(v.toFixed(2))};
+    });
+    return[...synth,...a.wts.map((w,i)=>({m:months[7+i]||w.m,v:w.v}))];
+  },[a.id,a.wts]);
+
+  // Normal weight band = current weight ± 15%. Pragmatic: race/âge-aware
+  // ranges would require a lookup table; per-individual is a sensible default
+  // for the prototype.
+  const currentWeight=weightSeries[weightSeries.length-1].v;
+  const prevMonthWeight=weightSeries[weightSeries.length-2]?.v;
+  const normalMin=Number((currentWeight*0.85).toFixed(2));
+  const normalMax=Number((currentWeight*1.15).toFixed(2));
+
+  // Month-over-month weight delta → alert
+  let weightAlert=null;
+  if(prevMonthWeight){
+    const delta=((currentWeight-prevMonthWeight)/prevMonthWeight)*100;
+    if(delta>10) weightAlert={kind:'gain',pct:delta,color:'#e67e22',bg:'rgba(230,126,34,.1)',label:`Prise de poids importante : +${delta.toFixed(1)}% en 1 mois`};
+    else if(delta<-15) weightAlert={kind:'loss',pct:delta,color:'#dc2626',bg:'rgba(220,38,38,.1)',label:`Perte de poids importante : ${delta.toFixed(1)}% en 1 mois`};
+  }
+
   useEffect(()=>{
     if(tab==='overview'&&chartRef.current){
       chartInst.current?.destroy();
+      const labels=weightSeries.map(w=>w.m);
       chartInst.current=new Chart(chartRef.current,{type:'line',
-        data:{labels:a.wts.map(w=>w.m),datasets:[{label:'Poids (kg)',data:a.wts.map(w=>w.v),borderColor:'#2BA08F',backgroundColor:'rgba(43,160,143,.06)',fill:true,tension:.4,pointBackgroundColor:'#2BA08F',pointBorderColor:isDark?'#161B22':'#fff',pointBorderWidth:2,pointRadius:5,borderWidth:2.5}]},
-        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.03)'},ticks:{color:isDark?'#6B7B8D':'#8C98A6'}},x:{grid:{display:false},ticks:{color:isDark?'#6B7B8D':'#8C98A6'}}}}
+        data:{labels,datasets:[
+          // Normal zone (drawn first, two flat datasets with fill between)
+          {label:'Zone normale (max)',data:labels.map(()=>normalMax),borderColor:'transparent',backgroundColor:'rgba(22,163,74,.1)',pointRadius:0,fill:'+1',tension:0,borderWidth:0},
+          {label:'Zone normale (min)',data:labels.map(()=>normalMin),borderColor:'transparent',pointRadius:0,fill:false,tension:0,borderWidth:0},
+          {label:'Poids (kg)',data:weightSeries.map(w=>w.v),borderColor:'#2BA08F',backgroundColor:'rgba(43,160,143,.06)',fill:false,tension:.4,pointBackgroundColor:'#2BA08F',pointBorderColor:isDark?'#161B22':'#fff',pointBorderWidth:2,pointRadius:5,pointHoverRadius:7,borderWidth:2.5},
+        ]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>{if(c.datasetIndex===2)return `Poids : ${c.parsed.y} kg`;if(c.datasetIndex===0)return `Plafond : ${c.parsed.y} kg`;if(c.datasetIndex===1)return `Plancher : ${c.parsed.y} kg`;return '';}}}},scales:{y:{grid:{color:isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.03)'},ticks:{color:isDark?'#6B7B8D':'#8C98A6',callback:v=>v+' kg'}},x:{grid:{display:false},ticks:{color:isDark?'#6B7B8D':'#8C98A6',maxRotation:0,autoSkip:true}}}}
       });
     }
     return()=>{chartInst.current?.destroy();};
-  },[tab,a,isDark]);
+  },[tab,a,isDark,weightSeries,normalMin,normalMax]);
   return(<div>
     <button className="btn btn-sm btn-o" style={{marginBottom:16}} onClick={()=>nav('animals')}>← Retour aux patients</button>
     {isArchived&&<div style={{padding:'12px 16px',background:archiveMeta.bg,border:`1px solid ${archiveMeta.color}33`,borderRadius:12,marginBottom:16,display:'flex',gap:12,alignItems:'center'}}>
@@ -2609,6 +2825,21 @@ function AnimalDetail(){
         </div>
       </div>
     </div>}
+    {!isArchived&&(()=>{
+      const due=(a.vacc||[]).map(v=>({v,u:vaccUrgency(v),d:vaccDaysLeft(v)})).filter(x=>x.u==='soon'||x.u==='expired');
+      if(!due.length) return null;
+      const hasExpired=due.some(x=>x.u==='expired');
+      const color=hasExpired?'#dc2626':'#e67e22';
+      const bg=hasExpired?'rgba(220,38,38,.08)':'rgba(230,126,34,.08)';
+      return(<div style={{padding:'12px 16px',background:bg,border:`1px solid ${color}40`,borderRadius:12,marginBottom:16,display:'flex',gap:12,alignItems:'flex-start'}}>
+        <span style={{fontSize:'1.4rem'}}>💉</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,color,fontSize:'.92rem'}}>{hasExpired?'Vaccin(s) expiré(s)':'Vaccin(s) à renouveler bientôt'}</div>
+          <div style={{fontSize:'.8rem',color:'var(--txt2)',marginTop:3,lineHeight:1.4}}>{due.map(x=>`${x.v.nm} (${describeVaccDays(x.v)})`).join(' · ')}</div>
+        </div>
+        <button className="btn btn-o btn-sm" onClick={()=>setTab('vaccinations')}>Voir</button>
+      </div>);
+    })()}
     <div className="c af" style={{marginBottom:18}}>
       <div style={{display:'flex',gap:22,alignItems:'flex-start',flexWrap:'wrap'}}>
         <div style={{position:'relative',flexShrink:0}}>
@@ -2658,7 +2889,20 @@ function AnimalDetail(){
     <div className="tabs af1" style={{maxWidth:600}}>
       {['overview','vaccinations','history','documents'].map(k=><button key={k} className={`tab ${tab===k?'on':''}`} onClick={()=>setTab(k)}>{{overview:"Vue d'ensemble",vaccinations:'Vaccinations',history:'Historique',documents:'Documents'}[k]}</button>)}
     </div>
-    {tab==='overview'&&<div className="g2 af2"><div className="c"><div className="c-title">Évolution du poids</div><div style={{height:200,marginTop:10}}><canvas ref={chartRef}/></div></div>
+    {tab==='overview'&&<div className="g2 af2"><div className="c">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,gap:8,flexWrap:'wrap'}}>
+        <div>
+          <div className="c-title">Évolution du poids · 12 mois</div>
+          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:2}}>Actuel : <strong style={{color:'var(--txt)'}}>{currentWeight} kg</strong> · Zone normale : {normalMin}–{normalMax} kg</div>
+        </div>
+        {!isArchived&&<button className="btn btn-t btn-sm" onClick={()=>setModal({type:'quickAct',title:`Ajouter une pesée — ${a.nm}`,animalId:a.id,defaultType:'Pesée'})}>+ Pesée</button>}
+      </div>
+      {weightAlert&&<div style={{padding:'8px 12px',background:weightAlert.bg,border:`1px solid ${weightAlert.color}40`,borderRadius:10,marginBottom:8,display:'flex',gap:8,alignItems:'center'}}>
+        <span style={{fontSize:'1.1rem'}}>{weightAlert.kind==='gain'?'⚠️':'🔻'}</span>
+        <div style={{fontSize:'.8rem',color:weightAlert.color,fontWeight:600,lineHeight:1.35}}>{weightAlert.label}</div>
+      </div>}
+      <div style={{height:200,marginTop:10}}><canvas ref={chartRef}/></div>
+    </div>
       <div className="c"><div className="c-title" style={{marginBottom:12}}>Antécédents médicaux</div>{a.hist.map((h,i)=><div key={i} style={{display:'flex',gap:10,alignItems:'center',padding:'9px 0',borderBottom:i<a.hist.length-1?'1px solid var(--bg)':'none'}}>
         <div style={{width:8,height:8,borderRadius:'50%',background:h.type==='emergency'?'#e74c3c':h.type==='surgery'?'var(--g)':'var(--t)',flexShrink:0}}/>
         <div style={{flex:1}}><span style={{fontSize:'.86rem',color:'var(--txt)'}}>{h.t}</span><div style={{fontSize:'.72rem',color:'var(--txt2)',marginTop:2}}>{h.d} · <span className="tag" style={{fontSize:'.6rem',padding:'1px 6px',background:h.type==='emergency'?'rgba(231,76,60,.1)':h.type==='surgery'?'rgba(200,164,92,.1)':'rgba(43,160,143,.1)',color:h.type==='emergency'?'#e74c3c':h.type==='surgery'?'var(--g)':'var(--t)'}}>{h.type==='emergency'?'Urgence':h.type==='surgery'?'Chirurgie':h.type==='follow-up'?'Suivi':h.type==='vaccination'?'Vaccination':'Consultation'}</span></div></div>
@@ -3804,6 +4048,230 @@ function StatCard({ic,label,value,trend,color}){
       {trend&&<div className="stat-ch" style={{color:positive?'#16a34a':'var(--txt2)',display:'inline-flex',alignItems:'center',gap:3,marginTop:3,fontSize:'.74rem'}}>{positive&&<I.ArrowUp/>}{trend} vs mois dernier</div>}
     </div>
   </div></div>);
+}
+
+// ===== EMERGENCIES =====
+// Static protocols, no AI. Each step has plain text; meds have a dose formula
+// applied to the patient weight entered at the top of the protocol.
+const EMERGENCIES=[
+  {id:'gdv',label:"Torsion d'estomac (GDV)",icon:'🌀',severity:'Critique',
+    steps:[
+      {t:"Reconnaître le tableau",d:"Distension abdominale, tentatives de vomissement improductives, ptyalisme, agitation. Race à risque (grand chien thoracique profond)."},
+      {t:"Décompression gastrique d'urgence",d:"Sondage oro-gastrique ou trocardisation paralombaire droite (16-18 G) si sondage impossible."},
+      {t:"Stabilisation hémodynamique",d:"Fluidothérapie agressive : cristalloïdes 60-90 ml/kg/h IV bolus initial (2 voies large calibre)."},
+      {t:"Analgésie + bilan",d:"Méthadone 0.2 mg/kg IV. ECG (arythmies ventriculaires fréquentes). Lactates, hémato, biochimie."},
+      {t:"Chirurgie en urgence",d:"Gastropexie + reposition de l'estomac. Ne pas différer : pronostic temps-dépendant."},
+    ],
+    meds:[
+      {nm:'Méthadone',formula:0.2,unit:'mg/kg IV',note:'Analgésie'},
+      {nm:'Cristalloïdes (RL)',formula:80,unit:'ml/kg/h',note:'Bolus initial'},
+      {nm:'Lidocaïne',formula:2,unit:'mg/kg IV bolus',note:'Si arythmie ventriculaire'},
+    ]},
+  {id:'tox',label:'Empoisonnement',icon:'☠️',severity:'Critique',
+    steps:[
+      {t:"Identifier le toxique",d:"Nature, quantité, délai d'ingestion. Photo de l'emballage si possible. Appeler le CAPAE si doute (02 40 68 77 40)."},
+      {t:"Décontamination",d:"Si ingestion < 2 h et toxique adapté : émèse (apomorphine 0.04 mg/kg IV chien)."},
+      {t:"Charbon actif",d:"1-4 g/kg PO après émèse (sauf produit caustique ou hydrocarbure)."},
+      {t:"Antidote spécifique",d:"Selon toxique : éthylène glycol → fomépizole / éthanol ; anti-Vit K → vitamine K1 ; opiacés → naloxone."},
+      {t:"Soutien + surveillance 24-48h",d:"Fluidothérapie, surveillance neurologique, cardiaque, fonction hépatique/rénale à J+2."},
+    ],
+    meds:[
+      {nm:'Apomorphine',formula:0.04,unit:'mg/kg IV',note:'Émèse chien'},
+      {nm:'Charbon actif',formula:2,unit:'g/kg PO',note:'Adsorbant'},
+      {nm:'Vitamine K1',formula:2.5,unit:'mg/kg SC, 1×/j',note:'Anti-Vit K'},
+    ]},
+  {id:'hemo',label:'Hémorragie',icon:'🩸',severity:'Critique',
+    steps:[
+      {t:"Hémostase locale immédiate",d:"Compression directe au point hémorragique 5-10 min minimum. Garrot uniquement en dernier recours."},
+      {t:"Évaluer le choc",d:"FC, TRC, qualité du pouls, muqueuses, lactates. Choc compensé ou décompensé ?"},
+      {t:"Voie veineuse + remplissage",d:"2 voies large calibre. Cristalloïdes 20 ml/kg bolus, réévaluer ; colloïdes si réponse insuffisante."},
+      {t:"Antifibrinolytique / coagulants",d:"Acide tranexamique 10 mg/kg IV lente. Vitamine K1 si suspicion anti-Vit K."},
+      {t:"Transfusion si nécessaire",d:"Sang total ou CGR si HCT < 20% ou choc persistant malgré remplissage."},
+    ],
+    meds:[
+      {nm:'Cristalloïdes (RL)',formula:20,unit:'ml/kg bolus',note:'Remplissage'},
+      {nm:'Acide tranexamique',formula:10,unit:'mg/kg IV lente',note:'Antifibrinolytique'},
+      {nm:'Vitamine K1',formula:2.5,unit:'mg/kg SC',note:'Si suspicion anti-Vit K'},
+    ]},
+  {id:'rcp',label:'Arrêt cardio-respiratoire',icon:'💔',severity:'Critique',
+    steps:[
+      {t:"Reconnaître l'ACR (< 10 s)",d:"Apnée + absence de pouls fémoral + inconscience. Démarrer immédiatement."},
+      {t:"MCE 100-120 / min",d:"Compressions thoraciques 1/3 à 1/2 de l'amplitude thoracique, cycles de 2 min sans interruption."},
+      {t:"Ventilation 10 / min",d:"Intubation OT dès que possible, O2 100%, ratio 30:2 si non intubé."},
+      {t:"Adrénaline IV / IO",d:"0.01 mg/kg IV bolus (dilution 1:10000), répéter toutes les 3-5 min."},
+      {t:"Évaluer rythme + soins post-arrêt",d:"ECG → asystolie / DEM / FV (défibrillation). Si RACS : NaCl 0.9%, surveillance neurologique."},
+    ],
+    meds:[
+      {nm:'Adrénaline',formula:0.01,unit:'mg/kg IV',note:'1:10000, q 3-5 min'},
+      {nm:'Atropine',formula:0.04,unit:'mg/kg IV',note:'Si bradycardie / asystolie'},
+      {nm:'NaCl 0.9%',formula:10,unit:'ml/kg bolus',note:'Soutien post-RACS'},
+    ]},
+  {id:'resp',label:'Détresse respiratoire',icon:'🫁',severity:'Critique',
+    steps:[
+      {t:"Oxygénothérapie immédiate",d:"Masque, cage à O2 ou flow-by 100-200 ml/kg/min. Manipulation minimale, animal en position sternale."},
+      {t:"Évaluer la cause",d:"Voies hautes (stertor, dyspnée inspiratoire), basses (sibilances), parenchymateuse, épanchement, douleur."},
+      {t:"Sédation prudente si stress",d:"Butorphanol 0.2 mg/kg IM (excellent pour œdème laryngé, asthme félin)."},
+      {t:"Traitement étiologique",d:"Furosémide si OAP, ponction pleurale si épanchement, bronchodilatateurs si bronchospasme."},
+      {t:"Imagerie + bilan",d:"Échographie POCUS thoracique en première intention, radio quand stable, gaz du sang si disponible."},
+    ],
+    meds:[
+      {nm:'Butorphanol',formula:0.2,unit:'mg/kg IM',note:'Sédation douce'},
+      {nm:'Furosémide',formula:2,unit:'mg/kg IV',note:'OAP cardiogénique'},
+      {nm:'Terbutaline',formula:0.01,unit:'mg/kg SC',note:'Bronchospasme'},
+    ]},
+  {id:'anaph',label:'Choc anaphylactique',icon:'⚡',severity:'Critique',
+    steps:[
+      {t:"Arrêt immédiat de l'allergène",d:"Stopper toute injection ou contact. Noter l'agent suspect."},
+      {t:"Adrénaline IM en premier",d:"0.01 mg/kg IM (1:1000) — face latérale de la cuisse. NE PAS attendre."},
+      {t:"Voie veineuse + remplissage",d:"Cristalloïdes 20-30 ml/kg bolus IV. Vasoplégie systémique fréquente."},
+      {t:"Corticoïdes + antihistaminique",d:"Dexaméthasone 0.2-0.5 mg/kg IV + diphenhydramine 1-2 mg/kg IM."},
+      {t:"Surveillance 12-24 h",d:"Réactions biphasiques possibles. Monitorer FC, PA, FR."},
+    ],
+    meds:[
+      {nm:'Adrénaline (1:1000)',formula:0.01,unit:'mg/kg IM',note:'1ère ligne'},
+      {nm:'Dexaméthasone',formula:0.3,unit:'mg/kg IV',note:'Corticoïde'},
+      {nm:'Diphenhydramine',formula:1.5,unit:'mg/kg IM',note:'Anti-H1'},
+      {nm:'Cristalloïdes',formula:25,unit:'ml/kg bolus',note:'Remplissage'},
+    ]},
+  {id:'conv',label:'Convulsions',icon:'⚡',severity:'Urgent',
+    steps:[
+      {t:"Sécuriser l'environnement",d:"Protéger l'animal des chutes. Chronométrer la crise."},
+      {t:"Diazépam IV en bolus",d:"0.5-1 mg/kg IV lente. Répéter jusqu'à 3× à 5 min d'intervalle si nécessaire."},
+      {t:"Si status epilepticus",d:"Phénobarbital 4-6 mg/kg IV ou kétamine en CRI 2-5 mg/kg/h."},
+      {t:"Bilan étiologique",d:"Glycémie, calcémie, ionogramme. Causes : toxique, métabolique, idiopathique, structurelle."},
+      {t:"Hospitalisation surveillance",d:"Si > 1 crise / 24h ou status. Traitement de fond à discuter (phénobarbital chronique)."},
+    ],
+    meds:[
+      {nm:'Diazépam',formula:0.5,unit:'mg/kg IV bolus',note:'1ère ligne'},
+      {nm:'Phénobarbital',formula:5,unit:'mg/kg IV',note:'Si récidive'},
+      {nm:'Lévétiracétam',formula:60,unit:'mg/kg IV',note:'Alternative'},
+    ]},
+  {id:'heat',label:'Coup de chaleur',icon:'🌡️',severity:'Critique',
+    steps:[
+      {t:"Refroidir activement",d:"Eau tiède (pas froide) sur tout le corps, ventilateur. Cible : T° < 39.5°C en 30 min, ne PAS descendre sous 39°C."},
+      {t:"Voie veineuse + fluidothérapie",d:"Cristalloïdes froids 20 ml/kg bolus IV, à adapter selon réponse."},
+      {t:"Oxygénothérapie + surveillance",d:"O2 systématique. ECG, lactates, hémato, coagulation (CIVD fréquente)."},
+      {t:"Arrêter refroidissement à 39.5°C",d:"Risque d'hypothermie de rebond. Surveiller T° rectale toutes les 5 min."},
+      {t:"Hospitalisation 24-48h",d:"Risque de complications retardées : IRA, CIVD, hépatopathie, œdème cérébral."},
+    ],
+    meds:[
+      {nm:'Cristalloïdes froids',formula:20,unit:'ml/kg bolus',note:'Refroidissement IV'},
+      {nm:'Méthadone',formula:0.2,unit:'mg/kg IV',note:'Si douleur / stress'},
+    ]},
+];
+
+function Emergencies(){
+  const{nav}=useContext(Ctx);
+  const[active,setActive]=useState(null); // protocol id
+  const[stepIdx,setStepIdx]=useState(0);
+  const[elapsed,setElapsed]=useState(0);
+  const[weight,setWeight]=useState('');
+  const startRef=useRef(null);
+  const timerRef=useRef(null);
+
+  // Tick the elapsed timer once a protocol is opened.
+  useEffect(()=>{
+    if(!active) return;
+    startRef.current=Date.now();
+    setElapsed(0);
+    timerRef.current=setInterval(()=>{setElapsed(Math.floor((Date.now()-startRef.current)/1000));},1000);
+    return()=>{clearInterval(timerRef.current);timerRef.current=null;};
+  },[active]);
+
+  const fmtElapsed=(s)=>{const m=Math.floor(s/60);const r=s%60;return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;};
+  const protocol=active?EMERGENCIES.find(p=>p.id===active):null;
+  const step=protocol?protocol.steps[stepIdx]:null;
+
+  // LIST VIEW
+  if(!active) return(<div>
+    <div style={{padding:'14px 18px',background:'linear-gradient(135deg,rgba(231,76,60,.1),rgba(231,76,60,.04))',border:'1px solid rgba(231,76,60,.3)',borderRadius:14,marginBottom:18,display:'flex',gap:14,alignItems:'center'}}>
+      <span style={{fontSize:'2rem'}}>🚨</span>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700,color:'#c0392b',fontFamily:'var(--fh)',fontSize:'1.05rem'}}>Module Urgences</div>
+        <div style={{fontSize:'.84rem',color:'var(--txt2)',marginTop:2}}>Protocoles cliniques en step-by-step. Chronomètre intégré, posologies calculées par poids.</div>
+      </div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:12}}>
+      {EMERGENCIES.map(p=>(<button key={p.id} type="button" onClick={()=>{setActive(p.id);setStepIdx(0);}}
+        style={{display:'flex',gap:14,alignItems:'center',padding:'16px 18px',background:'var(--card)',border:'1px solid var(--lg)',borderRadius:14,cursor:'pointer',textAlign:'left',transition:'all .15s',fontFamily:'inherit'}}
+        onMouseEnter={e=>{e.currentTarget.style.borderColor='#e74c3c';e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 6px 18px rgba(231,76,60,.12)';}}
+        onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--lg)';e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='none';}}>
+        <div style={{width:46,height:46,borderRadius:12,background:'rgba(231,76,60,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.6rem',flexShrink:0}}>{p.icon}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,color:'var(--txt)',fontSize:'.95rem'}}>🔴 {p.label}</div>
+          <div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:3}}>{p.steps.length} étapes · {p.meds.length} médicaments · {p.severity}</div>
+        </div>
+        <I.ChevR/>
+      </button>))}
+    </div>
+  </div>);
+
+  // PROTOCOL VIEW
+  return(<div>
+    {/* Top bar: back + URGENCE badge + timer */}
+    <div style={{padding:'14px 18px',background:'linear-gradient(135deg,#e74c3c,#c0392b)',color:'#fff',borderRadius:14,marginBottom:14,display:'flex',gap:14,alignItems:'center',flexWrap:'wrap'}}>
+      <button onClick={()=>{setActive(null);setStepIdx(0);clearInterval(timerRef.current);}} style={{background:'rgba(255,255,255,.18)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:8,cursor:'pointer',fontSize:'.78rem',fontFamily:'inherit'}}>← Liste</button>
+      <span style={{background:'rgba(255,255,255,.95)',color:'#c0392b',padding:'4px 12px',borderRadius:8,fontSize:'.7rem',fontWeight:800,letterSpacing:'.1em'}}>🚨 URGENCE</span>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:700,fontSize:'1.05rem',fontFamily:'var(--fh)'}}>{protocol.icon} {protocol.label}</div>
+        <div style={{fontSize:'.76rem',opacity:.85}}>Étape {stepIdx+1} sur {protocol.steps.length}</div>
+      </div>
+      <div style={{padding:'8px 14px',background:'rgba(0,0,0,.3)',borderRadius:10,fontFamily:'monospace',fontSize:'1.3rem',fontWeight:700,letterSpacing:'.05em'}}>⏱ {fmtElapsed(elapsed)}</div>
+    </div>
+
+    {/* Step progress */}
+    <div style={{display:'flex',gap:4,marginBottom:14}}>
+      {protocol.steps.map((_,i)=>(
+        <div key={i} onClick={()=>setStepIdx(i)} style={{flex:1,height:6,borderRadius:3,background:i<=stepIdx?'#e74c3c':'var(--lg)',cursor:'pointer',transition:'background .2s'}}/>
+      ))}
+    </div>
+
+    {/* Current step card */}
+    <div className="c af" style={{marginBottom:14,padding:'22px 24px'}}>
+      <div style={{display:'flex',gap:14,alignItems:'flex-start',marginBottom:14}}>
+        <div style={{width:42,height:42,borderRadius:'50%',background:'#e74c3c',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--fh)',fontWeight:800,fontSize:'1.1rem',flexShrink:0}}>{stepIdx+1}</div>
+        <div style={{flex:1}}>
+          <h3 style={{fontFamily:'var(--fh)',fontSize:'1.15rem',color:'var(--txt)',marginBottom:6}}>{step.t}</h3>
+          <p style={{fontSize:'.92rem',lineHeight:1.55,color:'var(--txt)',margin:0}}>{step.d}</p>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:8,justifyContent:'space-between',marginTop:18}}>
+        <button className="btn btn-o btn-sm" disabled={stepIdx===0} onClick={()=>setStepIdx(i=>Math.max(0,i-1))}>← Étape précédente</button>
+        {stepIdx<protocol.steps.length-1
+          ? <button className="btn" style={{background:'#e74c3c',color:'#fff'}} onClick={()=>setStepIdx(i=>i+1)}>Étape suivante →</button>
+          : <button className="btn btn-t" onClick={()=>{setActive(null);setStepIdx(0);}}>✓ Protocole terminé</button>}
+      </div>
+    </div>
+
+    {/* Meds card with weight-based dosing */}
+    <div className="c af1" style={{padding:'18px 20px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:10}}>
+        <div className="c-title">Médicaments d'urgence · doses calculées</div>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <label style={{fontSize:'.78rem',color:'var(--txt2)'}}>Poids :</label>
+          <div style={{position:'relative'}}>
+            <input className="fi" type="number" step="0.1" min="0" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="kg" style={{width:90,padding:'6px 28px 6px 10px',fontSize:'.84rem'}}/>
+            <span style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',fontSize:'.74rem',color:'var(--txt2)',pointerEvents:'none'}}>kg</span>
+          </div>
+        </div>
+      </div>
+      <table className="tbl">
+        <thead><tr><th>Médicament</th><th>Posologie</th><th style={{textAlign:'right'}}>Dose calculée</th><th>Note</th></tr></thead>
+        <tbody>{protocol.meds.map((m,i)=>{
+          const w=Number(weight);
+          const dose=w&&w>0?(m.formula*w):null;
+          const unit=m.unit.split(' ').slice(1).join(' ')||m.unit;
+          const baseUnit=m.unit.split(' ')[0];
+          return(<tr key={i}>
+            <td><strong style={{color:'var(--txt)'}}>{m.nm}</strong></td>
+            <td style={{fontSize:'.84rem',color:'var(--txt2)'}}>{m.formula} {m.unit}</td>
+            <td style={{textAlign:'right',fontFamily:'var(--fh)',fontWeight:700,color:dose?'#c0392b':'var(--mg)'}}>{dose?`${dose.toFixed(2)} ${baseUnit}`:'— saisir poids'}</td>
+            <td style={{fontSize:'.78rem',color:'var(--txt2)'}}>{m.note}</td>
+          </tr>);
+        })}</tbody>
+      </table>
+    </div>
+  </div>);
 }
 
 function Stats(){
