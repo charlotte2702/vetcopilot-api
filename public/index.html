@@ -1216,8 +1216,30 @@ function App(){
   // "today's" schedule); customApts piles new RDVs created via the modal and
   // persists them in localStorage so the planning survives refreshes.
   const APTS_KEY='vet.apts.v1';
+  const APTS_SEEDED_KEY='vet.aptsSeeded.v1';
   const[customApts,setCustomApts]=useState(()=>{
-    try{return JSON.parse(localStorage.getItem(APTS_KEY)||'[]');}catch(_){return[];}
+    try{
+      const stored=JSON.parse(localStorage.getItem(APTS_KEY)||'[]');
+      // One-time migration: copy mock APTS into customApts so every RDV is
+      // editable + persistable. Tagged _seed so we could differentiate later.
+      if(!localStorage.getItem(APTS_SEEDED_KEY)){
+        const todayISO=new Date().toISOString().slice(0,10);
+        const seeded=APTS.map(a=>({
+          ...a,
+          id:'apt-seed-'+a.id,
+          date:todayISO,
+          type:a.type||a.rsn,
+          status:a.st==='urg'?'pending':a.st==='wait'?'pending':'confirmed',
+          color:(APT_TYPES.find(t=>t.v===(a.type||a.rsn))?.color)||'#2BA08F',
+          _custom:true,_seed:true,
+        }));
+        const merged=[...stored,...seeded];
+        try{localStorage.setItem(APTS_KEY,JSON.stringify(merged));}catch(_){}
+        try{localStorage.setItem(APTS_SEEDED_KEY,'1');}catch(_){}
+        return merged;
+      }
+      return stored;
+    }catch(_){return[];}
   });
   const persistApts=(next)=>{try{localStorage.setItem(APTS_KEY,JSON.stringify(next));}catch(_){}};
   const addAppointment=useCallback((apt)=>{
@@ -2324,7 +2346,7 @@ function aptStatusValue(apt){
 }
 
 function EditAptForm({aptId}){
-  const{customApts,updateAppointment,removeAppointment,setModal,toast,teamMembers,archive}=useContext(Ctx);
+  const{customApts,updateAppointment,removeAppointment,setModal,toast,teamMembers,archive,nav,setSelAnimal}=useContext(Ctx);
   const apt=(customApts||[]).find(a=>a.id===aptId);
   const activeAnimals=ANIMALS.filter(a=>!(archive||{})[a.id]);
   const vets=(teamMembers||[]).filter(m=>m.role&&m.role.startsWith('Vétérinaire'));
@@ -2378,8 +2400,19 @@ function EditAptForm({aptId}){
     toast(`RDV de ${apt.nm} annulé`,'tl');
   };
 
+  const openPatient=()=>{
+    if(!animal) return;
+    setModal(null);
+    setSelAnimal&&setSelAnimal(animal);
+    nav('animal-detail',animal);
+  };
+
   return(<form onSubmit={save}>
-    <div className="fg"><label className="fl">Patient</label>
+    <div className="fg">
+      <label className="fl" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <span>Patient</span>
+        <button type="button" onClick={openPatient} style={{background:'none',border:'none',color:'var(--t)',cursor:'pointer',fontSize:'.74rem',fontWeight:600,padding:0,textTransform:'none',letterSpacing:0}}>→ Ouvrir la fiche</button>
+      </label>
       <select className="fi fi-sel" value={animalId} onChange={e=>setAnimalId(Number(e.target.value))}>
         {activeAnimals.map(a=><option key={a.id} value={a.id}>{Em[a.av]||'🐾'} {a.nm} — {a.owner}</option>)}
       </select>
@@ -2904,7 +2937,8 @@ function Dashboard(){
             <button className="btn btn-sm btn-o" onClick={()=>nav('schedule')}>Voir tout</button>
           </div>
           {activeApts.slice(0,5).map(a=>(
-            <div key={a.id} className="apt apt-bg" onClick={()=>{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}}>
+            <div key={a.id} className="apt apt-bg" style={{cursor:'pointer'}} title="Cliquer pour modifier le RDV"
+              onClick={()=>a._custom?setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id}):(function(){const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);})()}>
               <div className="apt-time">{a.t}</div>
               <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
               <div style={{flex:1,minWidth:0}}><div className="apt-nm">{a.nm}</div><div className="apt-dt">{a.rsn} — {a.own}</div></div>
@@ -3335,9 +3369,9 @@ function Schedule(){
   // Static APTS are mock "today" data — surface them only on the real system today.
   const aptsOn=useCallback((d)=>{
     const iso=dateISO(d);
-    const customMatches=(customApts||[]).filter(a=>a.date===iso);
-    const staticMatches=isSameDay(d,today)?APTS:[];
-    return[...customMatches,...staticMatches]
+    // All apts now live in customApts (mock apts seeded once at App mount).
+    return(customApts||[])
+      .filter(a=>a.date===iso)
       .filter(a=>!archivedNames.has(a.nm))
       .filter(matchesVet)
       .sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
@@ -3399,15 +3433,12 @@ function Schedule(){
         const typeColor=a.color||(APT_TYPES.find(t=>t.v===a.rsn)?.color)||'var(--t)';
         const isCancelled=a.status==='cancelled'||a.st==='cancelled';
         return(<div key={a.id} className="apt apt-bg" style={{marginBottom:4,borderLeft:`4px solid ${typeColor}`,cursor:'pointer',opacity:isCancelled?.55:1}}
-          onClick={()=>{
-            if(a._custom){setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id});}
-            else{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}
-          }}
-          title={a._custom?'Cliquer pour modifier le RDV':'Cliquer pour voir la fiche patient'}>
+          onClick={()=>setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id})}
+          title="Cliquer pour modifier le RDV">
           <div className="apt-time" style={{textDecoration:isCancelled?'line-through':'none'}}>{a.t}</div>
           <div className={`apt-av ${a.av}`} style={{filter:isCancelled?'grayscale(.5)':'none'}}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
           <div style={{flex:1,minWidth:0}}>
-            <div className="apt-nm" style={{textDecoration:isCancelled?'line-through':'none'}}>{a.nm} <span style={{fontWeight:400,color:'var(--txt2)',fontSize:'.78rem'}}>— {a.vet}</span>{a._custom&&!isCancelled&&<span style={{marginLeft:8,padding:'1px 7px',borderRadius:8,fontSize:'.62rem',fontWeight:700,background:'rgba(43,160,143,.12)',color:'var(--t)',textTransform:'uppercase',letterSpacing:'.04em'}}>Nouveau</span>}{isCancelled&&<span style={{marginLeft:8,padding:'1px 7px',borderRadius:8,fontSize:'.62rem',fontWeight:700,background:'rgba(148,163,184,.2)',color:'#64748b',textTransform:'uppercase',letterSpacing:'.04em'}}>Annulé</span>}</div>
+            <div className="apt-nm" style={{textDecoration:isCancelled?'line-through':'none'}}>{a.nm} <span style={{fontWeight:400,color:'var(--txt2)',fontSize:'.78rem'}}>— {a.vet}</span>{isCancelled&&<span style={{marginLeft:8,padding:'1px 7px',borderRadius:8,fontSize:'.62rem',fontWeight:700,background:'rgba(148,163,184,.2)',color:'#64748b',textTransform:'uppercase',letterSpacing:'.04em'}}>Annulé</span>}</div>
             <div className="apt-dt">{a.rsn} · {a.own} · {a.dur} min</div>
           </div>
           <span className={`apt-st ${a.st}`}>{stL[a.status||a.st]||stL[a.st]}</span>
@@ -3438,12 +3469,8 @@ function Schedule(){
                   const c=a.color||(APT_TYPES.find(t=>t.v===a.rsn)?.color)||'#2BA08F';
                   const isCancelled=a.status==='cancelled'||a.st==='cancelled';
                   return(<div key={ei} className="cal-evt" style={{background:c+'22',borderLeft:`3px solid ${c}`,color:'var(--txt)',opacity:isCancelled?.55:1,textDecoration:isCancelled?'line-through':'none'}}
-                    onClick={(e)=>{
-                      e.stopPropagation();
-                      if(a._custom){setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id});}
-                      else{const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);}
-                    }}
-                    title={`${a.t} · ${a.nm} · ${a.rsn}${a._custom?' (cliquer pour modifier)':''}`}>{a.t} {a.nm}<br/><span style={{fontSize:'.62rem',opacity:.75}}>{a.rsn}</span></div>);
+                    onClick={(e)=>{e.stopPropagation();setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id});}}
+                    title={`${a.t} · ${a.nm} · ${a.rsn} — cliquer pour modifier`}>{a.t} {a.nm}<br/><span style={{fontSize:'.62rem',opacity:.75}}>{a.rsn}</span></div>);
                 })}
               </div>);
             })}
