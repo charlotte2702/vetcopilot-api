@@ -1216,14 +1216,17 @@ function App(){
   // "today's" schedule); customApts piles new RDVs created via the modal and
   // persists them in localStorage so the planning survives refreshes.
   const APTS_KEY='vet.apts.v1';
-  const APTS_SEEDED_KEY='vet.aptsSeeded.v1';
+  const APTS_SEEDED_KEY='vet.aptsSeeded.v2'; // v2: fix UTC date bug — forces a one-time re-seed
   const[customApts,setCustomApts]=useState(()=>{
     try{
       const stored=JSON.parse(localStorage.getItem(APTS_KEY)||'[]');
       // One-time migration: copy mock APTS into customApts so every RDV is
       // editable + persistable. Tagged _seed so we could differentiate later.
+      // v2: also strips any previous _seed entries (they had broken UTC dates).
       if(!localStorage.getItem(APTS_SEEDED_KEY)){
-        const todayISO=new Date().toISOString().slice(0,10);
+        const _t=new Date();
+        const todayISO=`${_t.getFullYear()}-${String(_t.getMonth()+1).padStart(2,'0')}-${String(_t.getDate()).padStart(2,'0')}`;
+        const userCreated=stored.filter(a=>!a._seed); // keep manually created apts
         const seeded=APTS.map(a=>({
           ...a,
           id:'apt-seed-'+a.id,
@@ -1233,7 +1236,7 @@ function App(){
           color:(APT_TYPES.find(t=>t.v===(a.type||a.rsn))?.color)||'#2BA08F',
           _custom:true,_seed:true,
         }));
-        const merged=[...stored,...seeded];
+        const merged=[...userCreated,...seeded];
         try{localStorage.setItem(APTS_KEY,JSON.stringify(merged));}catch(_){}
         try{localStorage.setItem(APTS_SEEDED_KEY,'1');}catch(_){}
         return merged;
@@ -3331,7 +3334,14 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
 
 // ===== SCHEDULE (WEEK VIEW) =====
 // Date helpers shared by Schedule's three views.
-function dateISO(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate()).toISOString().slice(0,10);}
+// LOCAL YYYY-MM-DD (no UTC conversion — fixes off-by-one near midnight for
+// users east of UTC). Used everywhere we compare cursor day to apt.date.
+function dateISO(d){
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,'0');
+  const day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 function isSameDay(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();}
 function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
 function startOfWeek(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(0,0,0,0);return x;}
