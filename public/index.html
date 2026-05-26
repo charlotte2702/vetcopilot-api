@@ -580,21 +580,21 @@ const ANIMALS=[
    hist:[{t:'Cystite',d:'Janv 2026',type:'emergency'},{t:'Vaccination annuelle',d:'Mars 2026',type:'vaccination'}]},
 ];
 const APTS=[
-  {id:1,t:'08:30',nm:'Rex',own:'M. Dupont',rsn:'Contrôle diabète',av:'dog',st:'ok',vet:'Dr. Martin',dur:30},
-  {id:2,t:'09:15',nm:'Mina',own:'Mme Bernard',rsn:'Vaccination leucose',av:'cat',st:'ok',vet:'Dr. Martin',dur:20},
-  {id:3,t:'10:00',nm:'Coco',own:'M. Lefevre',rsn:'Contrôle respiratoire',av:'bird',st:'wait',vet:'Dr. Martin',dur:30},
-  {id:4,t:'10:45',nm:'Nuage',own:'Mme Moreau',rsn:'Vérification dentaire',av:'rabbit',st:'ok',vet:'Dr. Martin',dur:20},
-  {id:5,t:'11:30',nm:'Luna',own:'M. Garcia',rsn:'Bilan thyroïdien',av:'cat',st:'urg',vet:'Dr. Martin',dur:45},
-  {id:6,t:'14:00',nm:'Rocky',own:'Mme Laurent',rsn:'Suivi post-op tumeur',av:'dog',st:'ok',vet:'Dr. Durand',dur:30},
-  {id:7,t:'14:45',nm:'Bella',own:'M. Petit',rsn:'Contrôle arthrose',av:'dog',st:'wait',vet:'Dr. Durand',dur:30},
-  {id:8,t:'15:30',nm:'Simba',own:'Mme Dubois',rsn:'Suivi cystite',av:'cat',st:'ok',vet:'Dr. Martin',dur:30},
-  {id:9,t:'16:15',nm:'Rex',own:'M. Dupont',rsn:'Échographie abdominale',av:'dog',st:'urg',vet:'Dr. Martin',dur:60},
+  {id:1,t:'08:30',nm:'Rex',own:'M. Dupont',rsn:'Contrôle diabète',av:'dog',st:'ok',vet:'Dr. Patrick Hayot',dur:30},
+  {id:2,t:'09:15',nm:'Mina',own:'Mme Bernard',rsn:'Vaccination leucose',av:'cat',st:'ok',vet:'Dr. Arnaud Vergnangeal',dur:20},
+  {id:3,t:'10:00',nm:'Coco',own:'M. Lefevre',rsn:'Contrôle respiratoire',av:'bird',st:'wait',vet:'Dr. Axelle Freville',dur:30},
+  {id:4,t:'10:45',nm:'Nuage',own:'Mme Moreau',rsn:'Vérification dentaire',av:'rabbit',st:'ok',vet:'Dr. Miryea Barra',dur:20},
+  {id:5,t:'11:30',nm:'Luna',own:'M. Garcia',rsn:'Bilan thyroïdien',av:'cat',st:'urg',vet:'Dr. Patrick Hayot',dur:45},
+  {id:6,t:'14:00',nm:'Rocky',own:'Mme Laurent',rsn:'Suivi post-op tumeur',av:'dog',st:'ok',vet:'Dr. Séréna Vidé',dur:30},
+  {id:7,t:'14:45',nm:'Bella',own:'M. Petit',rsn:'Contrôle arthrose',av:'dog',st:'wait',vet:'Dr. Arnaud Vergnangeal',dur:30},
+  {id:8,t:'15:30',nm:'Simba',own:'Mme Dubois',rsn:'Suivi cystite',av:'cat',st:'ok',vet:'Dr. Miryea Barra',dur:30},
+  {id:9,t:'16:15',nm:'Rex',own:'M. Dupont',rsn:'Échographie abdominale',av:'dog',st:'urg',vet:'Dr. Patrick Hayot',dur:60},
 ];
 const NOTIFS=[
   {id:1,type:'urg',title:'Urgence — Luna',text:'Bilan thyroïdien anormal, consultation prioritaire',time:'Il y a 15 min',unread:true},
   {id:2,type:'apt',title:'Prochain RDV dans 30 min',text:'Rex — Contrôle diabète à 09:30',time:'Il y a 25 min',unread:true},
   {id:3,type:'cr',title:'CR à rédiger',text:'Compte rendu de Luna — Bilan thyroïdien en attente',time:'Il y a 1h',unread:true},
-  {id:4,type:'cr',title:'CR validé',text:'Compte rendu de Nuage validé par Dr. Durand',time:'Il y a 2h',unread:false},
+  {id:4,type:'cr',title:'CR validé',text:'Compte rendu de Nuage validé par Dr. Vergnangeal',time:'Il y a 2h',unread:false},
   {id:5,type:'vacc',title:'Rappel vaccination',text:'Leptospirose de Rex prévue le 20/06',time:'Hier',unread:false},
   {id:6,type:'pay',title:'Paiement reçu',text:'Facture #2026-087 — Mme Bernard — 85,00 €',time:'Hier',unread:false},
 ];
@@ -618,21 +618,38 @@ const INVOICES=[
   {id:'2026-084',client:'M. Garcia',animal:'Luna',date:'09/05/2026',total:95,status:'paid'},
   {id:'2026-083',client:'Mme Moreau',animal:'Nuage',date:'08/05/2026',total:65,status:'overdue'},
 ];
-const CHAT_INIT=[{r:'bot',t:"Bonjour Dr. Martin ! Je suis VetCopilot AI. Posez-moi une question sur vos patients, protocoles, plannings ou médicaments. 🩺"}];
+const CHAT_INIT=[{r:'bot',t:"Bonjour Dr. Hayot ! Je suis VetCopilot AI. Posez-moi une question sur vos patients, protocoles, plannings ou médicaments. 🩺"}];
 
-// Clinic team. `color` seeds the avatar gradient when no photo is set.
+// Clinique Vétérinaire Berlioz — staff
+const CLINIC={
+  name:'Clinique Vétérinaire Berlioz',
+  address:'6-8 rue Louise Ackermann, 06000 Nice',
+  phone:'04 93 87 39 42',
+  hours:'Lun-Jeu 8h-19h · Ven 8h-13h et 14h-19h · Sam 8h-13h',
+  label:'Cat Friendly Clinic',
+};
 const TEAM=[
-  {id:1,firstName:'Jean',lastName:'Martin',role:'Vétérinaire principal',email:'dr.martin@vetcopilot.fr',phone:'06 12 34 56 78',specialty:'Chirurgie, médecine interne',status:'active',color:'#2BA08F'},
-  {id:2,firstName:'Sophie',lastName:'Durand',role:'Vétérinaire',email:'dr.durand@vetcopilot.fr',phone:'06 23 45 67 89',specialty:'Dermatologie, NAC',status:'active',color:'#C8A45C'},
-  {id:3,firstName:'Julie',lastName:'Lambert',role:'ASV',email:'julie.lambert@vetcopilot.fr',phone:'06 34 56 78 90',specialty:'',status:'off',color:'#9b59b6'},
-  {id:4,firstName:'Marie',lastName:'Petit',role:'Secrétaire',email:'marie.petit@vetcopilot.fr',phone:'06 45 67 89 01',specialty:'',status:'leave',color:'#3498db'},
+  {id:1,firstName:'Patrick',    lastName:'Hayot',       initials:'PH',role:'Vétérinaire associé',email:'patrick.hayot@clinique-berlioz.fr',     phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#2BA08F'},
+  {id:2,firstName:'Arnaud',     lastName:'Vergnangeal', initials:'AV',role:'Vétérinaire associé',email:'arnaud.vergnangeal@clinique-berlioz.fr',phone:'04 93 87 39 42',specialty:'Référent Cat Friendly',         status:'active',color:'#C8A45C'},
+  {id:3,firstName:'Axelle',     lastName:'Freville',    initials:'AF',role:'Vétérinaire',        email:'axelle.freville@clinique-berlioz.fr',   phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#9b59b6'},
+  {id:4,firstName:'Miryea',     lastName:'Barra',       initials:'MB',role:'Vétérinaire',        email:'miryea.barra@clinique-berlioz.fr',      phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#3498db'},
+  {id:5,firstName:'Séréna',     lastName:'Vidé',        initials:'SV',role:'Vétérinaire',        email:'serena.vide@clinique-berlioz.fr',       phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#e67e22'},
+  {id:6,firstName:'Camille',    lastName:'',            initials:'CA',role:'ASV',                email:'camille@clinique-berlioz.fr',           phone:'04 93 87 39 42',specialty:'Référente Cat Friendly',        status:'active',color:'#16a34a'},
+  {id:7,firstName:'Julie',      lastName:'',            initials:'JU',role:'ASV',                email:'julie@clinique-berlioz.fr',             phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#27ae60'},
+  {id:8,firstName:'Manon',      lastName:'',            initials:'MN',role:'ASV',                email:'manon@clinique-berlioz.fr',             phone:'04 93 87 39 42',specialty:'Référente Cat Friendly',        status:'active',color:'#1abc9c'},
+  {id:9,firstName:'Margaux',    lastName:'',            initials:'MG',role:'ASV',                email:'margaux@clinique-berlioz.fr',           phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#34495e'},
+  {id:10,firstName:'Marina',    lastName:'',            initials:'MR',role:'ASV',                email:'marina@clinique-berlioz.fr',            phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#5d6d7e'},
+  {id:11,firstName:'Emmanuelle',lastName:'',            initials:'EM',role:'ASV',                email:'emmanuelle@clinique-berlioz.fr',        phone:'04 93 87 39 42',specialty:'',                              status:'active',color:'#a569bd'},
 ];
 function teamMemberInitials(m){
-  return ((m.firstName||'?')[0] + (m.lastName||'')[0]).toUpperCase();
+  if(m.initials) return m.initials;
+  const f=(m.firstName||'?')[0];
+  const l=(m.lastName||'')[0];
+  return (l?(f+l):(m.firstName||'?').slice(0,2)).toUpperCase();
 }
 function teamMemberFullName(m){
   const prefix=m.role&&m.role.startsWith('Vétérinaire')?'Dr. ':'';
-  return `${prefix}${m.firstName} ${m.lastName}`;
+  return `${prefix}${m.firstName}${m.lastName?' '+m.lastName:''}`.trim();
 }
 // Archive reason styling. Voluntarily muted/grey for deceased — respectful,
 // not a "tag of shame". Transferred + inactive use slightly warmer greys so
@@ -1128,7 +1145,7 @@ function App(){
   return(
     <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment}}>
       {showLogin ? (
-        <LoginPage onLogin={()=>{nav('dashboard');toast('Bienvenue, Dr. Martin !','tl');}} />
+        <LoginPage onLogin={()=>{const u=teamMembers.find(m=>m.id===currentUserId)||teamMembers[0];nav('dashboard');toast(`Bienvenue, ${teamMemberFullName(u)} !`,'tl');}} />
       ) : (
         <div className={`app${IS_EMBED?' embed':''}`}>
           {!IS_EMBED&&<Sidebar open={sbOpen} onClose={()=>setSbOpen(false)}/>}
@@ -1671,7 +1688,7 @@ function ChatWidget(){
         <button className="chat-hdr-close" onClick={()=>setChatOpen(false)} aria-label="Fermer le chat">×</button>
       </div>
       <div className="chat-msgs" ref={msgsRef}>
-        {!hasUserMsg&&<div className="chat-bubble assistant">Bonjour Dr. Martin, comment puis-je vous aider ?</div>}
+        {!hasUserMsg&&<div className="chat-bubble assistant">Bonjour Dr. Hayot, comment puis-je vous aider ?</div>}
         {chatMessages.map((m,i)=>(
           <div key={i} className={`chat-bubble ${m.error?'error':m.role}`}>{m.content}</div>
         ))}
@@ -1851,7 +1868,7 @@ function NewAptForm({prefill}){
 
   const animal=activeAnimals.find(a=>a.id===Number(animalId))||activeAnimals[0];
   const vet=vets.find(v=>v.id===Number(vetId))||vets[0];
-  const vetName=vet?teamMemberFullName(vet):'Dr. Jean Martin';
+  const vetName=vet?teamMemberFullName(vet):'Dr. Patrick Hayot';
 
   // Conflict detection: only against persisted customApts (static APTS use a
   // different shape with no `date` — treated as a separate, mock day).
@@ -1951,7 +1968,7 @@ function QuickActForm({animalId,defaultType}){
       date,
       dateDisplay:formatDateFR(date),
       type,
-      vet:vet?teamMemberFullName(vet):'Dr. Martin',
+      vet:vet?teamMemberFullName(vet):'Dr. Patrick Hayot',
       vetId:vet?.id,
       notes:notes.trim(),
       ...(weight?{weight:Number(weight)}:{}),
@@ -2112,7 +2129,7 @@ function NewMemberForm(){
       </div>
     </div>
     <div className="g2">
-      <div className="fg"><label className="fl">Email</label><input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="prenom.nom@vetcopilot.fr" required/></div>
+      <div className="fg"><label className="fl">Email</label><input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="prenom.nom@clinique-berlioz.fr" required/></div>
       <div className="fg"><label className="fl">Téléphone</label><input className="fi" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="06 XX XX XX XX"/></div>
     </div>
     <div className="fg"><label className="fl">Spécialité (optionnel)</label><input className="fi" value={specialty} onChange={e=>setSpecialty(e.target.value)} placeholder="Ex: dermatologie, NAC"/></div>
@@ -2245,7 +2262,8 @@ function VaccineRemindersCard(){
 }
 
 function Dashboard(){
-  const{nav,setModal,toast,archive,customApts}=useContext(Ctx);
+  const{nav,setModal,toast,archive,customApts,currentUserId,teamMembers}=useContext(Ctx);
+  const me=(teamMembers||[]).find(m=>m.id===currentUserId)||teamMembers[0];
   const chartRef=useRef(null);const chartInst=useRef(null);
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
@@ -2271,7 +2289,7 @@ function Dashboard(){
 
   return(<div>
     <div className="welcome af">
-      <h2>Bonjour, Dr. Martin 👋</h2>
+      <h2>Bonjour, {me?teamMemberFullName(me):'Dr. Hayot'} 👋</h2>
       <p>Votre journée : 9 consultations, 2 opérations et 1 urgence à traiter.</p>
       <div className="welcome-actions">
         <button className="btn btn-t btn-lg" onClick={()=>nav('consultation')}><I.Play/> Démarrer consultation</button>
@@ -2390,7 +2408,7 @@ function ConsultationFlow(){
     const total=actes.reduce((s,a)=>s+(a.qty||1)*a.price,0);
     const draft={
       id:draftId,date:isoDate,animal:an.nm,client:an.owner||'Propriétaire',
-      animalId:an.id,status:'pending',actes,total,vet:'Dr. Martin'
+      animalId:an.id,status:'pending',actes,total,vet:'Dr. Patrick Hayot'
     };
     if(addInvoice) addInvoice(draft);
     toast(`Consultation terminée — facture brouillon ${draftId} créée`,'tl');
@@ -2563,7 +2581,7 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
     try{
       await downloadPdf({
         url:'/api/soap/export-pdf',
-        body:{patient:{nm:an.nm,sp:an.sp,breed:an.breed,age:an.age,sex:an.sex,wt:an.wt,owner:an.owner,phone:an.phone},soap,ownerSummary,date:dateStr,vet:'Dr. Jean Martin'},
+        body:{patient:{nm:an.nm,sp:an.sp,breed:an.breed,age:an.age,sex:an.sex,wt:an.wt,owner:an.owner,phone:an.phone},soap,ownerSummary,date:dateStr,vet:'Dr. Patrick Hayot'},
         filename:`CR_${safeFilename(an.nm)}_${todayISO()}.pdf`
       });
       toast('PDF généré','tl');
@@ -2622,8 +2640,8 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
       <div style={{background:'linear-gradient(135deg,rgba(11,29,52,.03),rgba(43,160,143,.03))',borderRadius:'var(--r)',padding:24,border:'1px solid rgba(43,160,143,.1)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:18,paddingBottom:14,borderBottom:'1px solid var(--lg)'}}>
           <div>
-            <div style={{fontFamily:'var(--fh)',fontSize:'1.1rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire VetCopilot</div>
-            <div style={{fontSize:'.76rem',color:'var(--txt2)',marginTop:2}}>15 rue de la Santé, 75013 Paris · Tél : 01 23 45 67 89</div>
+            <div style={{fontFamily:'var(--fh)',fontSize:'1.1rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire Berlioz</div>
+            <div style={{fontSize:'.76rem',color:'var(--txt2)',marginTop:2}}>6-8 rue Louise Ackermann, 06000 Nice · Tél : 04 93 87 39 42</div>
           </div>
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Date : {dateStr}</div>
@@ -2653,7 +2671,7 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
 
         <div style={{borderTop:'1px solid var(--lg)',paddingTop:14,marginTop:8,display:'flex',justifyContent:'space-between',alignItems:'flex-end'}}>
           <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Document généré par VetCopilot IA — vérifié et validé par le praticien</div>
-          <div style={{textAlign:'right'}}><div style={{fontWeight:700,fontSize:'.86rem',color:'var(--txt)'}}>Dr. Jean Martin</div><div style={{fontSize:'.72rem',color:'var(--txt2)'}}>N° Ordre : 75-12345</div></div>
+          <div style={{textAlign:'right'}}><div style={{fontWeight:700,fontSize:'.86rem',color:'var(--txt)'}}>Dr. Patrick Hayot</div><div style={{fontSize:'.72rem',color:'var(--txt2)'}}>N° Ordre : 75-12345</div></div>
         </div>
       </div>
     </div>}
@@ -2669,8 +2687,8 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
 
       <div style={{background:'var(--bg)',borderRadius:'var(--r)',padding:26,border:'1px solid var(--lg)'}}>
         <div style={{textAlign:'center',marginBottom:20,paddingBottom:16,borderBottom:'1px dashed var(--lg)'}}>
-          <div style={{fontFamily:'var(--fh)',fontSize:'1.15rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire VetCopilot</div>
-          <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:4}}>15 rue de la Santé, 75013 Paris · 01 23 45 67 89</div>
+          <div style={{fontFamily:'var(--fh)',fontSize:'1.15rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire Berlioz</div>
+          <div style={{fontSize:'.78rem',color:'var(--txt2)',marginTop:4}}>6-8 rue Louise Ackermann, 06000 Nice · 04 93 87 39 42</div>
           <div style={{fontSize:'.78rem',color:'var(--txt2)'}}>Consultation du {dateLong}</div>
         </div>
 
@@ -2684,7 +2702,7 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
           </div>
 
           <p style={{marginTop:16}}>N'hésitez pas à nous appeler si vous avez la moindre question.</p>
-          <p style={{marginTop:14}}>Cordialement,<br/><strong>Dr. Jean Martin</strong><br/><span style={{fontSize:'.82rem',color:'var(--txt2)'}}>Clinique VetCopilot — 01 23 45 67 89</span></p>
+          <p style={{marginTop:14}}>Cordialement,<br/><strong>Dr. Patrick Hayot</strong><br/><span style={{fontSize:'.82rem',color:'var(--txt2)'}}>Clinique Berlioz — 04 93 87 39 42</span></p>
         </div>
       </div>
     </div>}
@@ -2725,7 +2743,14 @@ function Schedule(){
   const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
 
   // Vet filter — applied uniformly across views
-  const matchesVet=(a)=>filter==='all'||(filter==='martin'&&(a.vet||'').includes('Martin'))||(filter==='durand'&&(a.vet||'').includes('Durand'));
+  // Filter values are TEAM member IDs (as strings) or 'all'. Match by full name.
+  const matchesVet=(a)=>{
+    if(filter==='all') return true;
+    const m=TEAM.find(x=>String(x.id)===filter);
+    if(!m) return true;
+    const fn=teamMemberFullName(m);
+    return (a.vet||'')===fn||(a.vet||'').includes(m.lastName||m.firstName);
+  };
   // Static APTS are mock "today" data — surface them only on the real system today.
   const aptsOn=useCallback((d)=>{
     const iso=dateISO(d);
@@ -2778,7 +2803,10 @@ function Schedule(){
           <button className={`tab ${view==='week'?'on':''}`} onClick={()=>setView('week')}>Semaine</button>
           <button className={`tab ${view==='month'?'on':''}`} onClick={()=>setView('month')}>Mois</button>
         </div>
-        <select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Tous</option><option value="martin">Dr. Martin</option><option value="durand">Dr. Durand</option></select>
+        <select className="fi fi-sel" style={{width:'auto',padding:'7px 32px 7px 12px',fontSize:'.82rem'}} value={filter} onChange={e=>setFilter(e.target.value)}>
+          <option value="all">Tous les vétérinaires</option>
+          {TEAM.filter(m=>m.role.startsWith('Vétérinaire')).map(m=><option key={m.id} value={String(m.id)}>{teamMemberFullName(m)}</option>)}
+        </select>
       </div>
       <button className="btn btn-t btn-sm" onClick={()=>setModal({title:'Nouveau rendez-vous',type:'newApt',prefill:{date:dateISO(cursor)}})}><I.Plus/> Nouveau RDV</button>
     </div>
@@ -3292,7 +3320,7 @@ function OrdonnanceCard({animal,results,symptoms}){
           patient:{nm:animal.nm,sp:animal.sp,breed:animal.breed,age:animal.age,sex:animal.sex,wt:animal.wt,owner:animal.owner,phone:animal.phone,chip:animal.chip},
           diagnostic:topHypo||'',
           clinique:ord.clinique,pharmacie:ord.pharmacie,alerteAllergies:ord.alerteAllergies,
-          vet:'Dr. Jean Martin'
+          vet:'Dr. Patrick Hayot'
         },
         filename:`Ordonnance_${safeFilename(animal.nm)}_${todayISO()}.pdf`
       });
@@ -3728,8 +3756,8 @@ function Reports(){
   // Cache generated SOAPs per patient name so re-opening a preview doesn't
   // re-hit Claude (and burn ~30s + tokens) each time.
   const[cache,setCache]=useState({});
-  const pending=[{nm:'Luna',em:'🐈',dt:"Aujourd'hui",type:'Bilan thyroïdien',vet:'Dr. Martin',owner:'M. Garcia',breed:'Siamois',age:'7 ans',wt:'3.8 kg'},{nm:'Coco',em:'🐦',dt:'Hier',type:'Contrôle respiratoire',vet:'Dr. Martin',owner:'M. Lefevre',breed:'Ara bleu',age:'12 ans',wt:'1.1 kg'},{nm:'Nuage',em:'🐰',dt:'09/05/2026',type:'Vérification dentaire',vet:'Dr. Durand',owner:'Mme Moreau',breed:'Bélier nain',age:'2 ans',wt:'1.8 kg'}];
-  const archived=[{nm:'Rex',em:'🐕',dt:'05/05/2026',type:'Gastro-entérite',vet:'Dr. Martin',st:'Validé',owner:'M. Dupont'},{nm:'Bella',em:'🐕',dt:'01/05/2026',type:'Contrôle arthrose',vet:'Dr. Durand',st:'Envoyé',owner:'M. Petit'},{nm:'Simba',em:'🐈',dt:'28/04/2026',type:'Suivi cystite',vet:'Dr. Martin',st:'Validé',owner:'Mme Dubois'}];
+  const pending=[{nm:'Luna',em:'🐈',dt:"Aujourd'hui",type:'Bilan thyroïdien',vet:'Dr. Patrick Hayot',owner:'M. Garcia',breed:'Siamois',age:'7 ans',wt:'3.8 kg'},{nm:'Coco',em:'🐦',dt:'Hier',type:'Contrôle respiratoire',vet:'Dr. Axelle Freville',owner:'M. Lefevre',breed:'Ara bleu',age:'12 ans',wt:'1.1 kg'},{nm:'Nuage',em:'🐰',dt:'09/05/2026',type:'Vérification dentaire',vet:'Dr. Miryea Barra',owner:'Mme Moreau',breed:'Bélier nain',age:'2 ans',wt:'1.8 kg'}];
+  const archived=[{nm:'Rex',em:'🐕',dt:'05/05/2026',type:'Gastro-entérite',vet:'Dr. Patrick Hayot',st:'Validé',owner:'M. Dupont'},{nm:'Bella',em:'🐕',dt:'01/05/2026',type:'Contrôle arthrose',vet:'Dr. Séréna Vidé',st:'Envoyé',owner:'M. Petit'},{nm:'Simba',em:'🐈',dt:'28/04/2026',type:'Suivi cystite',vet:'Dr. Arnaud Vergnangeal',st:'Validé',owner:'Mme Dubois'}];
 
   const openPreview=async(r)=>{
     setPreview(r);setPreviewTab('vet');setError('');
@@ -3825,7 +3853,7 @@ function Reports(){
         </div>
         <div style={{background:'linear-gradient(135deg,rgba(11,29,52,.03),rgba(43,160,143,.03))',borderRadius:'var(--r)',padding:22,border:'1px solid rgba(43,160,143,.1)'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:16,paddingBottom:12,borderBottom:'1px solid var(--lg)'}}>
-            <div><div style={{fontFamily:'var(--fh)',fontSize:'1rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire VetCopilot</div><div style={{fontSize:'.74rem',color:'var(--txt2)'}}>15 rue de la Santé, 75013 Paris</div></div>
+            <div><div style={{fontFamily:'var(--fh)',fontSize:'1rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire Berlioz</div><div style={{fontSize:'.74rem',color:'var(--txt2)'}}>6-8 rue Louise Ackermann, 06000 Nice</div></div>
             <div style={{textAlign:'right',fontSize:'.74rem',color:'var(--txt2)'}}><div>Date : {preview.dt}</div></div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16,padding:12,background:'var(--bg)',borderRadius:10}}>
@@ -3845,8 +3873,8 @@ function Reports(){
         </div>
         <div style={{background:'var(--bg)',borderRadius:'var(--r)',padding:24,border:'1px solid var(--lg)'}}>
           <div style={{textAlign:'center',marginBottom:18,paddingBottom:14,borderBottom:'1px dashed var(--lg)'}}>
-            <div style={{fontFamily:'var(--fh)',fontSize:'1.05rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire VetCopilot</div>
-            <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>15 rue de la Santé, 75013 Paris · 01 23 45 67 89</div>
+            <div style={{fontFamily:'var(--fh)',fontSize:'1.05rem',fontWeight:700,color:'var(--txt)'}}>Clinique Vétérinaire Berlioz</div>
+            <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>6-8 rue Louise Ackermann, 06000 Nice · 04 93 87 39 42</div>
             <div style={{fontSize:'.76rem',color:'var(--txt2)'}}>Consultation du {preview.dt}</div>
           </div>
           <div style={{fontSize:'.88rem',lineHeight:1.85,color:'var(--txt)'}}>
@@ -3856,7 +3884,7 @@ function Reports(){
               <div style={{fontWeight:700,color:'var(--t)',fontSize:'.8rem',marginBottom:4}}>Résumé de la consultation</div>
               <p style={{whiteSpace:'pre-wrap'}}>{cached.ownerSummary}</p>
             </div>
-            <p style={{marginTop:14}}>Cordialement,<br/><strong>{preview.vet}</strong><br/><span style={{fontSize:'.8rem',color:'var(--txt2)'}}>Clinique VetCopilot</span></p>
+            <p style={{marginTop:14}}>Cordialement,<br/><strong>{preview.vet}</strong><br/><span style={{fontSize:'.8rem',color:'var(--txt2)'}}>Clinique Berlioz</span></p>
           </div>
         </div>
       </div>}
@@ -4088,7 +4116,7 @@ function Team(){
   return(<div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}}>
       <div>
-        <div style={{fontSize:'.74rem',color:'var(--txt2)',marginBottom:2}}>Clinique VetCopilot</div>
+        <div style={{fontSize:'.74rem',color:'var(--txt2)',marginBottom:2}}>Clinique Berlioz</div>
         <div style={{fontFamily:'var(--fh)',fontSize:'1.2rem',fontWeight:700,color:'var(--txt)'}}>{teamMembers.length} membre{teamMembers.length>1?'s':''}</div>
       </div>
       <button className="btn btn-t" onClick={openAdd}><I.Plus/> Ajouter un membre</button>
@@ -4309,8 +4337,11 @@ const TOP_PATIENTS=[
   {nm:'Nuage',sp:'Lapin',     av:'rabbit', visits:3,reason:'Vérification dentaire'},
 ];
 const VET_BREAKDOWN=[
-  {nm:'Dr. Martin',visits:65,color:'#2BA08F'},
-  {nm:'Dr. Durand',visits:48,color:'#C8A45C'},
+  {nm:'Dr. Patrick Hayot',     visits:48,color:'#2BA08F'},
+  {nm:'Dr. Arnaud Vergnangeal',visits:42,color:'#C8A45C'},
+  {nm:'Dr. Axelle Freville',   visits:36,color:'#9b59b6'},
+  {nm:'Dr. Miryea Barra',      visits:31,color:'#3498db'},
+  {nm:'Dr. Séréna Vidé',       visits:24,color:'#e67e22'},
 ];
 
 function StatCard({ic,label,value,trend,color}){
@@ -4822,11 +4853,11 @@ function Stats(){
 // ===== SETTINGS =====
 const APP_VERSION='3.0.0';
 const ACCOUNT_INFO={
-  firstName:'Jean',
-  lastName:'Martin',
-  email:'dr.martin@vetcopilot.fr',
-  role:'Vétérinaire',
-  ordreNum:'75-12345',
+  firstName:'Patrick',
+  lastName:'Hayot',
+  email:'patrick.hayot@clinique-berlioz.fr',
+  role:'Vétérinaire associé',
+  ordreNum:'06-12345',
 };
 
 // Compact pill switch + label + sub-line. Used by the Settings preferences
@@ -4847,9 +4878,12 @@ function PrefToggle({label,sub,on,onChange,disabled,last}){
 }
 
 function Settings(){
-  const{toast,dark,setDark,prefs,setPref}=useContext(Ctx);
-  const initials=(ACCOUNT_INFO.firstName[0]+ACCOUNT_INFO.lastName[0]).toUpperCase();
-  const fullName=`Dr. ${ACCOUNT_INFO.firstName} ${ACCOUNT_INFO.lastName}`;
+  const{toast,dark,setDark,prefs,setPref,currentUserId,teamMembers}=useContext(Ctx);
+  // Active user from the team roster; falls back to the static ACCOUNT_INFO seed.
+  const active=(teamMembers||[]).find(m=>m.id===currentUserId);
+  const userInfo=active?{firstName:active.firstName,lastName:active.lastName,email:active.email,role:active.role,ordreNum:ACCOUNT_INFO.ordreNum}:ACCOUNT_INFO;
+  const initials=active?teamMemberInitials(active):(ACCOUNT_INFO.firstName[0]+(ACCOUNT_INFO.lastName[0]||'')).toUpperCase();
+  const fullName=active?teamMemberFullName(active):`Dr. ${ACCOUNT_INFO.firstName} ${ACCOUNT_INFO.lastName}`;
 
   return(<div style={{maxWidth:680}}>
     {/* ACCOUNT INFO (read-only) */}
@@ -4859,15 +4893,15 @@ function Settings(){
         <div style={{width:64,height:64,borderRadius:'50%',background:'linear-gradient(135deg,var(--t),var(--g))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.15rem',color:'#fff',fontWeight:700,flexShrink:0}}>{initials}</div>
         <div style={{flex:1,minWidth:200}}>
           <div style={{fontFamily:'var(--fh)',fontSize:'1.1rem',fontWeight:700,color:'var(--txt)'}}>{fullName}</div>
-          <div style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:2}}>{ACCOUNT_INFO.role} · N° Ordre {ACCOUNT_INFO.ordreNum}</div>
+          <div style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:2}}>{userInfo.role} · N° Ordre {userInfo.ordreNum}</div>
         </div>
         <span className="tag tag-t" style={{fontSize:'.68rem'}}>Compte actif</span>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10}}>
         {[
           {k:'Nom complet',v:fullName},
-          {k:'Email',v:ACCOUNT_INFO.email},
-          {k:'Rôle',v:ACCOUNT_INFO.role},
+          {k:'Email',v:userInfo.email},
+          {k:'Rôle',v:userInfo.role},
         ].map((row,i)=>(
           <div key={i} style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10}}>
             <div style={{fontSize:'.68rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}}>{row.k}</div>
@@ -4924,7 +4958,7 @@ function Settings(){
         </div>
       </div>
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-        <a href="mailto:support@vetcopilot.fr" className="btn btn-o btn-sm" style={{textDecoration:'none'}}><I.Mail/> Contacter le support</a>
+        <a href="mailto:support@clinique-berlioz.fr" className="btn btn-o btn-sm" style={{textDecoration:'none'}}><I.Mail/> Contacter le support</a>
         <a href="#" onClick={e=>{e.preventDefault();toast('Centre d\'aide à venir','info');}} className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>Centre d'aide</a>
         <a href="#" onClick={e=>{e.preventDefault();toast('Conditions d\'utilisation à venir','info');}} className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>Conditions d'utilisation</a>
       </div>
@@ -5009,7 +5043,7 @@ function VoiceCapture(){
       date:dateISO,
       dateDisplay:formatDateFR(dateISO),
       type:VOICE_ACT_LABEL[parsed.actType]||'Autre',
-      vet:parsed.vetName||'Dr. Jean Martin',
+      vet:parsed.vetName||'Dr. Patrick Hayot',
       notes:parsed.notes||'',
       ...(parsed.weight?{weight:Number(parsed.weight)}:{}),
       ...(parsed.vaccineName?{vaccineName:parsed.vaccineName}:{}),
@@ -5149,7 +5183,7 @@ function Chatbot(){
     résumé:"📋 Résumé du jour : 9 consultations, 2 opérations, 1 urgence (Luna — thyroïde). 3 CR en attente de validation. Prochain RDV : Rex à 08:30. CA estimé : 1 245 €.",
     facture:"💶 5 factures ce mois : 3 payées (336,50 €), 1 en attente (320 €, Mme Laurent), 1 impayée (65 €, Mme Moreau). Total CA mai : 721,50 €.",
     urgence:"🚨 Protocole urgence : 1) Évaluer ABC (Airway, Breathing, Circulation). 2) Stabiliser le patient. 3) Anamnèse rapide. 4) Examens complémentaires ciblés. 5) Traitement symptomatique immédiat.",
-    bonjour:"Bonjour Dr. Martin ! 👋 Comment puis-je vous aider ? Résumé du jour, dossier patient, protocole, stock, ou facturation — je suis là.",
+    bonjour:"Bonjour Dr. Hayot ! 👋 Comment puis-je vous aider ? Résumé du jour, dossier patient, protocole, stock, ou facturation — je suis là.",
     merci:"Avec plaisir ! N'hésitez pas si vous avez d'autres questions. 🩺",
     image:"📷 L'analyse d'images IA est disponible dans l'Assistant diagnostic. Vous pouvez importer des photos cliniques, radios, échographies ou photos de plaies. L'IA analysera les structures visibles et proposera des hypothèses diagnostiques. Allez dans Diagnostic IA > onglet Analyse d'images.",
     default:"Je peux vous aider avec : les dossiers patients, protocoles vétérinaires, facturation, analyse d'images, résumés de cas ou diagnostics. Que souhaitez-vous savoir ?"
