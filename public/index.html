@@ -1212,63 +1212,72 @@ function App(){
     return animal;
   },[]);
 
-  // User-created appointments. The static APTS const stays untouched (mock
-  // "today's" schedule); customApts piles new RDVs created via the modal and
-  // persists them in localStorage so the planning survives refreshes.
+  // ===== APPOINTMENT STATE — clean architecture =====
+  // Two persistent slices on top of the static APTS const:
+  //   - customApts : net-new RDVs (NewAptForm / voice). Has unique ids.
+  //   - aptOverrides : { [id]: fullApt } — modifications and deletions for
+  //     any RDV (mock OR custom). Storing the FULL modified RDV (not a patch)
+  //     means there's no merge ambiguity: override wins.
+  // On render, allApts merges: mock APTS (with today's date), then customApts,
+  // then applies overrides by id, then filters out _deleted.
   const APTS_KEY='vet.apts.v1';
-  const APTS_SEEDED_KEY='vet.aptsSeeded.v2'; // v2: fix UTC date bug — forces a one-time re-seed
+  const APT_OVERRIDES_KEY='vet.aptOverrides.v1';
   const[customApts,setCustomApts]=useState(()=>{
     try{
       const stored=JSON.parse(localStorage.getItem(APTS_KEY)||'[]');
-      // One-time migration: copy mock APTS into customApts so every RDV is
-      // editable + persistable. Tagged _seed so we could differentiate later.
-      // v2: also strips any previous _seed entries (they had broken UTC dates).
-      if(!localStorage.getItem(APTS_SEEDED_KEY)){
-        const _t=new Date();
-        const todayISO=`${_t.getFullYear()}-${String(_t.getMonth()+1).padStart(2,'0')}-${String(_t.getDate()).padStart(2,'0')}`;
-        const userCreated=stored.filter(a=>!a._seed); // keep manually created apts
-        const seeded=APTS.map(a=>({
-          ...a,
-          id:'apt-seed-'+a.id,
-          date:todayISO,
-          type:a.type||a.rsn,
-          status:a.st==='urg'?'pending':a.st==='wait'?'pending':'confirmed',
-          color:(APT_TYPES.find(t=>t.v===(a.type||a.rsn))?.color)||'#2BA08F',
-          _custom:true,_seed:true,
-        }));
-        const merged=[...userCreated,...seeded];
-        try{localStorage.setItem(APTS_KEY,JSON.stringify(merged));}catch(_){}
-        try{localStorage.setItem(APTS_SEEDED_KEY,'1');}catch(_){}
-        return merged;
-      }
-      return stored;
+      // Strip legacy _seed entries from a previous design (would duplicate mock).
+      return stored.filter(a=>!a._seed);
     }catch(_){return[];}
   });
+  const[aptOverrides,setAptOverrides]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(APT_OVERRIDES_KEY)||'{}');}catch(_){return{};}
+  });
   const persistApts=(next)=>{try{localStorage.setItem(APTS_KEY,JSON.stringify(next));}catch(_){}};
+  const persistOverrides=(next)=>{try{localStorage.setItem(APT_OVERRIDES_KEY,JSON.stringify(next));}catch(_){}};
+
+  // Single source of truth: mock APTS inflated with today's date, then merged
+  // with customApts, then aptOverrides applied on top (any override REPLACES
+  // the base entry), then deleted ones filtered out.
+  const allApts=useMemo(()=>{
+    const _t=new Date();
+    const todayISO=`${_t.getFullYear()}-${String(_t.getMonth()+1).padStart(2,'0')}-${String(_t.getDate()).padStart(2,'0')}`;
+    const mock=APTS.map(a=>({
+      ...a,
+      date:todayISO,
+      type:a.type||a.rsn,
+      status:a.st==='urg'?'pending':a.st==='wait'?'pending':'confirmed',
+      color:(APT_TYPES.find(t=>t.v===(a.type||a.rsn))?.color)||'#2BA08F',
+      _mock:true,
+    }));
+    const combined=[...mock,...customApts];
+    return combined
+      .map(a=>{const ov=aptOverrides[a.id];return ov?ov:a;})
+      .filter(a=>!a._deleted);
+  },[customApts,aptOverrides]);
+
   const addAppointment=useCallback((apt)=>{
     setCustomApts(prev=>{
       const next=[{...apt,_custom:true,id:apt.id||'apt-'+Date.now()},...prev];
       persistApts(next);return next;
     });
   },[]);
-  const removeAppointment=useCallback((id)=>{
-    setCustomApts(prev=>{
-      const next=prev.filter(a=>a.id!==id);
-      persistApts(next);return next;
+  const updateAppointment=useCallback((id,fullApt)=>{
+    // Caller passes the COMPLETE modified RDV (original + changes merged).
+    const normalized={...fullApt,id};
+    if(normalized.date) normalized.date=normalizeDateISO(normalized.date)||normalized.date;
+    console.log('RDV modifié:',JSON.stringify(normalized));
+    setAptOverrides(prev=>{
+      const next={...prev,[id]:normalized};
+      persistOverrides(next);
+      return next;
     });
   },[]);
-  const updateAppointment=useCallback((id,patch)=>{
-    setCustomApts(prev=>{
-      const idx=prev.findIndex(a=>a.id===id);
-      if(idx<0){
-        console.warn('[updateAppointment] id not found:',id);
-        return prev;
-      }
-      // Always re-normalize the date on write so storage stays canonical.
-      const normalized={...patch};
-      if(normalized.date) normalized.date=normalizeDateISO(normalized.date)||prev[idx].date;
-      const next=[...prev.slice(0,idx),{...prev[idx],...normalized},...prev.slice(idx+1)];
-      persistApts(next);
+  const removeAppointment=useCallback((id)=>{
+    // Mark as deleted via override — works for both mock and custom apts.
+    setAptOverrides(prev=>{
+      const base=prev[id]||{};
+      const next={...prev,[id]:{...base,id,_deleted:true}};
+      persistOverrides(next);
       return next;
     });
   },[]);
@@ -1450,7 +1459,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment,updateAppointment,customAnimals,addAnimal,updateAnimal,deleteAnimal}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,allApts,aptOverrides,addAppointment,removeAppointment,updateAppointment,customAnimals,addAnimal,updateAnimal,deleteAnimal}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{const u=teamMembers.find(m=>m.id===currentUserId)||teamMembers[0];nav('dashboard');toast(`Bienvenue, ${teamMemberFullName(u)} !`,'tl');}} />
       ) : (
@@ -2358,8 +2367,8 @@ function aptStatusValue(apt){
 }
 
 function EditAptForm({aptId}){
-  const{customApts,updateAppointment,removeAppointment,setModal,toast,teamMembers,archive,nav,setSelAnimal}=useContext(Ctx);
-  const apt=(customApts||[]).find(a=>a.id===aptId);
+  const{allApts,updateAppointment,removeAppointment,setModal,toast,teamMembers,archive,nav,setSelAnimal}=useContext(Ctx);
+  const apt=(allApts||[]).find(a=>a.id===aptId);
   const activeAnimals=ANIMALS.filter(a=>!(archive||{})[a.id]);
   const vets=(teamMembers||[]).filter(m=>m.role&&m.role.startsWith('Vétérinaire'));
   const initialAnimal=apt?activeAnimals.find(a=>a.nm===apt.nm):null;
@@ -2381,16 +2390,13 @@ function EditAptForm({aptId}){
 
   // Conflict check excludes the apt we're editing itself
   const trial={date,t:time,dur,vet:vetName};
-  const conflict=(customApts||[]).find(other=>other.id!==apt.id&&aptsConflict(trial,other));
-  const proposedSlot=conflict?nextFreeSlot({date,vet:vetName,dur,fromTime:time},customApts.filter(o=>o.id!==apt.id)):null;
+  const conflict=(allApts||[]).find(other=>other.id!==apt.id&&aptsConflict(trial,other));
+  const proposedSlot=conflict?nextFreeSlot({date,vet:vetName,dur,fromTime:time},(allApts||[]).filter(o=>o.id!==apt.id)):null;
 
   const save=(e)=>{
     e&&e.preventDefault&&e.preventDefault();
     if(conflict){toast('Créneau déjà pris — choisissez un autre horaire','r');return;}
     if(!animal){toast('Sélectionnez un patient','r');return;}
-    // Normalize whatever the form has (may be empty if user cleared the picker)
-    // and fall back to the apt's existing date so a time-only edit can't blank
-    // out the date and make the row disappear from every day view.
     const normDate=normalizeDateISO(date)||normalizeDateISO(apt.date);
     if(!normDate){
       console.warn('[EditAptForm] no usable date for apt',apt.id);
@@ -2399,8 +2405,12 @@ function EditAptForm({aptId}){
     }
     const meta=APT_TYPES.find(t=>t.v===type)||APT_TYPES[0];
     const statusMeta=APT_STATUS_OPTIONS.find(s=>s.v===status)||APT_STATUS_OPTIONS[0];
-    const patch={
-      t:time||apt.t,
+    // Build the FULL modified RDV: every original field copied, then patches
+    // applied. updateAppointment writes this complete object to aptOverrides
+    // — no merge ambiguity, no missing fields.
+    const modified={
+      ...apt,                              // 1. copy all original fields
+      t:time||apt.t,                       // 2. apply form values
       date:normDate,
       dur:Number(dur)||apt.dur||30,
       nm:animal.nm,own:animal.owner,av:animal.av,
@@ -2412,7 +2422,7 @@ function EditAptForm({aptId}){
       status,
       notes:notes.trim(),
     };
-    updateAppointment(apt.id,patch);
+    updateAppointment(apt.id,modified);
     setModal(null);
     toast(`RDV de ${animal.nm} mis à jour`,'tl');
   };
@@ -2492,7 +2502,7 @@ function EditAptForm({aptId}){
 }
 
 function NewAptForm({prefill}){
-  const{addAppointment,addNotif,customApts,archive,teamMembers,setModal,toast}=useContext(Ctx);
+  const{addAppointment,addNotif,allApts,archive,teamMembers,setModal,toast}=useContext(Ctx);
   const todayISO=new Date().toISOString().slice(0,10);
   const activeAnimals=ANIMALS.filter(a=>!(archive||{})[a.id]);
   const vets=(teamMembers||[]).filter(m=>m.role&&m.role.startsWith('Vétérinaire'));
@@ -2508,11 +2518,10 @@ function NewAptForm({prefill}){
   const vet=vets.find(v=>v.id===Number(vetId))||vets[0];
   const vetName=vet?teamMemberFullName(vet):'Dr. Patrick Hayot';
 
-  // Conflict detection: only against persisted customApts (static APTS use a
-  // different shape with no `date` — treated as a separate, mock day).
+  // Conflict detection: against all visible apts (mock+custom+overrides).
   const trial={date,t:time,dur,vet:vetName};
-  const conflict=customApts.find(a=>aptsConflict(trial,a));
-  const proposedSlot=conflict?nextFreeSlot({date,vet:vetName,dur,fromTime:time},customApts):null;
+  const conflict=(allApts||[]).find(a=>aptsConflict(trial,a));
+  const proposedSlot=conflict?nextFreeSlot({date,vet:vetName,dur,fromTime:time},allApts||[]):null;
 
   const submit=(e)=>{
     e&&e.preventDefault&&e.preventDefault();
@@ -2900,17 +2909,19 @@ function VaccineRemindersCard(){
 }
 
 function Dashboard(){
-  const{nav,setModal,toast,archive,customApts,currentUserId,teamMembers}=useContext(Ctx);
+  const{nav,setModal,toast,archive,allApts,currentUserId,teamMembers}=useContext(Ctx);
   const me=(teamMembers||[]).find(m=>m.id===currentUserId)||teamMembers[0];
   const chartRef=useRef(null);const chartInst=useRef(null);
   const isDark=document.documentElement.getAttribute('data-theme')==='dark';
   const archivedNames=useMemo(()=>new Set(ANIMALS.filter(a=>archive[a.id]).map(a=>a.nm)),[archive]);
-  const todayISO=new Date().toISOString().slice(0,10);
-  // Custom apts scheduled today come first, then static APTS as the mock "today" data.
-  const activeApts=useMemo(()=>{
-    const customToday=(customApts||[]).filter(a=>a.date===todayISO).sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
-    return[...customToday,...APTS].filter(a=>!archivedNames.has(a.nm));
-  },[customApts,archivedNames,todayISO]);
+  const todayISO=dateISO(new Date());
+  // All today's RDVs from the unified source (mock + custom + overrides applied).
+  const activeApts=useMemo(()=>
+    (allApts||[])
+      .filter(a=>normalizeDateISO(a.date)===todayISO)
+      .filter(a=>!archivedNames.has(a.nm))
+      .sort((a,b)=>timeToMin(a.t)-timeToMin(b.t)),
+  [allApts,archivedNames,todayISO]);
   useEffect(()=>{
     if(!chartRef.current)return;
     if(chartInst.current)chartInst.current.destroy();
@@ -2962,7 +2973,7 @@ function Dashboard(){
           </div>
           {activeApts.slice(0,5).map(a=>(
             <div key={a.id} className="apt apt-bg" style={{cursor:'pointer'}} title="Cliquer pour modifier le RDV"
-              onClick={()=>a._custom?setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id}):(function(){const an=ANIMALS.find(x=>x.nm===a.nm);if(an)nav('animal-detail',an);})()}>
+              onClick={()=>setModal({type:'editApt',title:`RDV — ${a.nm}`,aptId:a.id})}>
               <div className="apt-time">{a.t}</div>
               <div className={`apt-av ${a.av}`}><AnimalAvatar animal={animalByName(a.nm,a.av)}/></div>
               <div style={{flex:1,minWidth:0}}><div className="apt-nm">{a.nm}</div><div className="apt-dt">{a.rsn} — {a.own}</div></div>
@@ -3400,7 +3411,7 @@ function monthMatrix(d){
 }
 
 function Schedule(){
-  const{nav,setModal,archive,customApts,removeAppointment,toast}=useContext(Ctx);
+  const{nav,setModal,archive,allApts,removeAppointment,toast}=useContext(Ctx);
   const[view,setView]=useState('week'); // 'day' | 'week' | 'month'
   const[filter,setFilter]=useState('all');
   const[cursor,setCursor]=useState(()=>new Date());
@@ -3420,13 +3431,14 @@ function Schedule(){
   // Static APTS are mock "today" data — surface them only on the real system today.
   const aptsOn=useCallback((d)=>{
     const iso=dateISO(d);
-    const all=customApts||[];
-    // Normalize on BOTH sides — handles legacy localStorage entries whose
-    // date might be a full ISO ('2026-05-27T...') or DD/MM/YYYY.
-    const byDate=all.filter(a=>normalizeDateISO(a.date)===iso);
-    const notArchived=byDate.filter(a=>!archivedNames.has(a.nm));
-    return notArchived.filter(matchesVet).sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
-  },[customApts,archivedNames,filter]);
+    const list=(allApts||[])
+      .filter(a=>normalizeDateISO(a.date)===iso)
+      .filter(a=>!archivedNames.has(a.nm))
+      .filter(matchesVet)
+      .sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
+    console.log(`RDV affichés pour ${iso}:`,list.length);
+    return list;
+  },[allApts,archivedNames,filter]);
 
   const handleDelete=(apt,e)=>{
     e&&e.stopPropagation&&e.stopPropagation();
