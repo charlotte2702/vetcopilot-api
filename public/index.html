@@ -1259,8 +1259,17 @@ function App(){
   },[]);
   const updateAppointment=useCallback((id,patch)=>{
     setCustomApts(prev=>{
-      const next=prev.map(a=>a.id===id?{...a,...patch}:a);
-      persistApts(next);return next;
+      const idx=prev.findIndex(a=>a.id===id);
+      if(idx<0){
+        console.warn('[updateAppointment] id not found:',id);
+        return prev;
+      }
+      // Always re-normalize the date on write so storage stays canonical.
+      const normalized={...patch};
+      if(normalized.date) normalized.date=normalizeDateISO(normalized.date)||prev[idx].date;
+      const next=[...prev.slice(0,idx),{...prev[idx],...normalized},...prev.slice(idx+1)];
+      persistApts(next);
+      return next;
     });
   },[]);
 
@@ -2379,19 +2388,31 @@ function EditAptForm({aptId}){
     e&&e.preventDefault&&e.preventDefault();
     if(conflict){toast('Créneau déjà pris — choisissez un autre horaire','r');return;}
     if(!animal){toast('Sélectionnez un patient','r');return;}
+    // Normalize whatever the form has (may be empty if user cleared the picker)
+    // and fall back to the apt's existing date so a time-only edit can't blank
+    // out the date and make the row disappear from every day view.
+    const normDate=normalizeDateISO(date)||normalizeDateISO(apt.date);
+    if(!normDate){
+      console.warn('[EditAptForm] no usable date for apt',apt.id);
+      toast('Date invalide — modification annulée','r');
+      return;
+    }
     const meta=APT_TYPES.find(t=>t.v===type)||APT_TYPES[0];
     const statusMeta=APT_STATUS_OPTIONS.find(s=>s.v===status)||APT_STATUS_OPTIONS[0];
-    updateAppointment(apt.id,{
-      t:time,date,dur:Number(dur),
+    const patch={
+      t:time||apt.t,
+      date:normDate,
+      dur:Number(dur)||apt.dur||30,
       nm:animal.nm,own:animal.owner,av:animal.av,
-      rsn:type,type,
+      rsn:type||apt.rsn||'Consultation',
+      type:type||apt.type||'Consultation',
       vet:vetName,vetId:vet?.id,
-      // Cancelled overrides the type color (grey); otherwise type color wins
       color:status==='cancelled'?'#94a3b8':meta.color,
       st:statusMeta.st,
       status,
       notes:notes.trim(),
-    });
+    };
+    updateAppointment(apt.id,patch);
     setModal(null);
     toast(`RDV de ${animal.nm} mis à jour`,'tl');
   };
@@ -2500,7 +2521,7 @@ function NewAptForm({prefill}){
     const meta=APT_TYPES.find(t=>t.v===type)||APT_TYPES[0];
     const apt={
       id:'apt-'+Date.now(),
-      t:time,date,dur:Number(dur),
+      t:time,date:normalizeDateISO(date)||dateISO(new Date()),dur:Number(dur),
       nm:animal.nm,own:animal.owner,av:animal.av,
       rsn:type,type,
       vet:vetName,vetId:vet?.id,
@@ -3342,6 +3363,26 @@ function dateISO(d){
   const day=String(d.getDate()).padStart(2,'0');
   return `${y}-${m}-${day}`;
 }
+// Normalize ANY incoming date (string, Date, full ISO, legacy formats) to a
+// strict local YYYY-MM-DD or null. Applied on every apt.date read/write so the
+// planning filter compares apples to apples.
+function normalizeDateISO(input){
+  if(!input) return null;
+  if(typeof input==='string'){
+    // Fast path: already YYYY-MM-DD or prefixed full ISO ('2026-05-27T...')
+    const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(input);
+    if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+    // DD/MM/YYYY legacy
+    const fr=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(input);
+    if(fr) return `${fr[3]}-${fr[2]}-${fr[1]}`;
+    // Last resort: let Date parse, then re-extract local components
+    const d=new Date(input);
+    if(!isNaN(d.getTime())) return dateISO(d);
+    return null;
+  }
+  if(input instanceof Date&&!isNaN(input.getTime())) return dateISO(input);
+  return null;
+}
 function isSameDay(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();}
 function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
 function startOfWeek(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(0,0,0,0);return x;}
@@ -3379,12 +3420,12 @@ function Schedule(){
   // Static APTS are mock "today" data — surface them only on the real system today.
   const aptsOn=useCallback((d)=>{
     const iso=dateISO(d);
-    // All apts now live in customApts (mock apts seeded once at App mount).
-    return(customApts||[])
-      .filter(a=>a.date===iso)
-      .filter(a=>!archivedNames.has(a.nm))
-      .filter(matchesVet)
-      .sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
+    const all=customApts||[];
+    // Normalize on BOTH sides — handles legacy localStorage entries whose
+    // date might be a full ISO ('2026-05-27T...') or DD/MM/YYYY.
+    const byDate=all.filter(a=>normalizeDateISO(a.date)===iso);
+    const notArchived=byDate.filter(a=>!archivedNames.has(a.nm));
+    return notArchived.filter(matchesVet).sort((a,b)=>timeToMin(a.t)-timeToMin(b.t));
   },[customApts,archivedNames,filter]);
 
   const handleDelete=(apt,e)=>{
@@ -5742,7 +5783,7 @@ function VoiceCapture(){
       const apt={
         id:'apt-'+Date.now(),
         t:rdvData.time||'09:00',
-        date:rdvData.date||new Date().toISOString().slice(0,10),
+        date:normalizeDateISO(rdvData.date)||dateISO(new Date()),
         dur:Number(rdvData.duration)||30,
         nm:animal.nm,own:animal.owner,av:animal.av,
         rsn:rdvData.type||'Consultation',type:rdvData.type||'Consultation',
