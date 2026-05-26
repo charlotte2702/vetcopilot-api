@@ -803,40 +803,117 @@ function resizeImageFile(file, maxDim = 400, quality = 0.85) {
 // caller can drop it straight into setState.
 function useDictation(){
   const[recording,setRecording]=useState(false);
+  const[finalText,setFinalText]=useState('');
+  const[interimText,setInterimText]=useState('');
   const recRef=useRef(null);
   const baseRef=useRef('');
   const finalRef=useRef('');
+  const userStoppedRef=useRef(false);
+  const onUpdateRef=useRef(null);
+  const onErrorRef=useRef(null);
+  const langRef=useRef('fr-FR');
+
   const RecognitionClass=(typeof window!=='undefined')&&(window.SpeechRecognition||window.webkitSpeechRecognition);
   const supported=!!RecognitionClass;
-  useEffect(()=>()=>{if(recRef.current){try{recRef.current.abort();}catch(_){ }}},[]);
-  const stop=useCallback(()=>{if(recRef.current){try{recRef.current.stop();}catch(_){ }}},[]);
-  const start=useCallback(({baseText='',onUpdate,onError,lang='fr-FR'}={})=>{
-    if(!supported){onError&&onError('Reconnaissance vocale non supportée par ce navigateur. Utilisez Chrome, Edge ou Safari récents.');return;}
-    if(recRef.current) return; // already running
-    baseRef.current=baseText;
-    finalRef.current='';
+
+  // Internal launcher — called by `start` (fresh session) AND by the auto-restart
+  // path inside onend (when the browser ends recognition while we're still
+  // supposed to be listening, e.g. Chrome's ~60s silence cutoff).
+  const _launch=useCallback(()=>{
+    if(recRef.current) return;
     const r=new RecognitionClass();
-    r.lang=lang; r.continuous=true; r.interimResults=true;
+    r.lang=langRef.current;
+    r.continuous=true;
+    r.interimResults=true;
+
+    r.onaudiostart=()=>{console.log('[dict] audiostart');};
+    r.onsoundstart=()=>{console.log('[dict] soundstart');};
+    r.onspeechstart=()=>{console.log('[dict] speechstart');};
+    r.onstart=()=>{console.log('[dict] start');setRecording(true);};
+
     r.onresult=(ev)=>{
       let interim='';
       for(let i=ev.resultIndex;i<ev.results.length;i++){
         const t=ev.results[i][0].transcript;
         if(ev.results[i].isFinal) finalRef.current+=t; else interim+=t;
       }
+      console.log('[dict] result · final="'+finalRef.current+'" · interim="'+interim+'"');
+      setFinalText(finalRef.current);
+      setInterimText(interim);
       const base=baseRef.current;
       const sep=base&&!/\s$/.test(base)?' ':'';
-      onUpdate&&onUpdate(base+sep+finalRef.current+interim);
+      const combined=base+sep+finalRef.current+interim;
+      onUpdateRef.current&&onUpdateRef.current(combined,{final:finalRef.current,interim,combined});
     };
+
     r.onerror=(ev)=>{
-      const msgs={'not-allowed':'Accès au micro refusé. Autorisez le micro dans les paramètres du navigateur.','service-not-allowed':'Service de reconnaissance vocale indisponible.','no-speech':'Aucune parole détectée — réessayez en parlant plus fort.','audio-capture':'Aucun micro détecté sur cet appareil.','network':'Erreur réseau pendant la reconnaissance.','aborted':null};
+      console.warn('[dict] error',ev.error,ev);
+      const msgs={
+        'not-allowed':'Accès au micro refusé. Autorisez le micro dans les paramètres du navigateur.',
+        'service-not-allowed':'Service de reconnaissance vocale indisponible.',
+        'no-speech':null, // benign — onend will auto-restart
+        'audio-capture':'Aucun micro détecté sur cet appareil.',
+        'network':'Erreur réseau pendant la reconnaissance.',
+        'aborted':null,
+      };
       const m=Object.prototype.hasOwnProperty.call(msgs,ev.error)?msgs[ev.error]:'Erreur reconnaissance vocale : '+ev.error;
-      if(m) onError&&onError(m);
+      if(m) onErrorRef.current&&onErrorRef.current(m);
     };
-    r.onend=()=>{recRef.current=null;setRecording(false);};
-    try{r.start();recRef.current=r;setRecording(true);}
-    catch(err){onError&&onError('Impossible de démarrer la reconnaissance : '+(err.message||err));}
-  },[supported]);
-  return{recording,supported,start,stop};
+
+    r.onend=()=>{
+      console.log('[dict] end (userStopped='+userStoppedRef.current+')');
+      recRef.current=null;
+      // Chrome cuts off after ~60s of silence. If the user didn't ask us to
+      // stop, restart automatically so dictation feels continuous.
+      if(!userStoppedRef.current){
+        console.log('[dict] auto-restart');
+        setTimeout(()=>{ if(!userStoppedRef.current){try{_launch();}catch(e){console.error('[dict] restart failed',e);setRecording(false);}} },80);
+        return;
+      }
+      setRecording(false);
+      setInterimText('');
+    };
+
+    try{
+      r.start();
+      recRef.current=r;
+      console.log('[dict] recognition.start() called, lang='+langRef.current);
+    }catch(err){
+      console.error('[dict] start failed',err);
+      onErrorRef.current&&onErrorRef.current('Impossible de démarrer la reconnaissance : '+(err.message||err));
+    }
+  },[]);
+
+  const start=useCallback(({baseText='',onUpdate,onError,lang='fr-FR'}={})=>{
+    if(!supported){
+      console.warn('[dict] not supported in this browser');
+      onError&&onError('Navigateur non compatible avec la reconnaissance vocale — utilisez Chrome, Edge ou Safari récent.');
+      return;
+    }
+    if(recRef.current){console.log('[dict] start ignored, already running');return;}
+    baseRef.current=baseText;
+    finalRef.current='';
+    userStoppedRef.current=false;
+    onUpdateRef.current=onUpdate;
+    onErrorRef.current=onError;
+    langRef.current=lang;
+    setFinalText('');
+    setInterimText('');
+    _launch();
+  },[supported,_launch]);
+
+  const stop=useCallback(()=>{
+    console.log('[dict] user stop');
+    userStoppedRef.current=true;
+    if(recRef.current){try{recRef.current.stop();}catch(_){}}
+  },[]);
+
+  useEffect(()=>()=>{
+    userStoppedRef.current=true;
+    if(recRef.current){try{recRef.current.abort();}catch(_){}}
+  },[]);
+
+  return{recording,supported,start,stop,finalText,interimText};
 }
 
 // ===== LOGO =====
@@ -5292,6 +5369,10 @@ function VoiceCapture(){
   const[step,setStep]=useState('idle'); // idle | recording | sending | parsed
   const[editing,setEditing]=useState(false);
   const dict=useDictation();
+  // Mirror state in a ref so stopMic's setTimeout reads the latest value
+  // instead of the stale closure capture.
+  const transcriptRef=useRef('');
+  useEffect(()=>{transcriptRef.current=transcript;},[transcript]);
 
   const activeAnimals=useMemo(()=>ANIMALS.filter(a=>!(archive||{})[a.id]),[archive]);
 
@@ -5320,13 +5401,20 @@ function VoiceCapture(){
 
   const startMic=()=>{
     if(step==='sending') return;
-    if(!dict.supported){toast("Reconnaissance vocale non supportée — utilisez Chrome, Edge ou Safari récents.",'r');return;}
-    setTranscript('');setParsed(null);setSelectedAnimalId(null);setStep('recording');
-    dict.start({onUpdate:setTranscript,onError:(m)=>{toast(m,'r');setStep('idle');}});
+    if(!dict.supported){toast("Navigateur non compatible — utilisez Chrome, Edge ou Safari récent.",'r');return;}
+    setTranscript('');transcriptRef.current='';
+    setParsed(null);setSelectedAnimalId(null);setStep('recording');
+    dict.start({
+      onUpdate:(combined)=>{
+        setTranscript(combined);
+        transcriptRef.current=combined;
+      },
+      onError:(m)=>{toast(m,'r');setStep('idle');},
+    });
   };
 
   const parseTranscript=async(text)=>{
-    if(!text||!text.trim()){toast('Aucun texte à analyser','r');return;}
+    if(!text||!text.trim()){toast('Aucun texte à analyser — réessayez en parlant plus clairement','r');setStep('idle');return;}
     setStep('sending');
     try{
       const r=await fetch('/api/voice-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
@@ -5341,7 +5429,12 @@ function VoiceCapture(){
 
   const stopMic=()=>{
     dict.stop();
-    setTimeout(()=>{parseTranscript(transcript);},120); // let final transcript flush
+    // Wait for the last onresult/onend to fire so transcriptRef has the final value.
+    setTimeout(()=>{
+      const text=transcriptRef.current||transcript;
+      console.log('[VoiceCapture] stop · final transcript:',JSON.stringify(text));
+      parseTranscript(text);
+    },300);
   };
 
   const validate=()=>{
@@ -5403,7 +5496,11 @@ function VoiceCapture(){
           </div>
           {!isRecording&&!isSending&&<div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:6,lineHeight:1.45,padding:'0 8px'}}>Ex : "Rex est venu pour son rappel CHPL, 32 kilos, tout va bien, prochaine visite dans un an"</div>}
         </div>
-        {transcript&&<div style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10,border:'1px solid var(--lg)',fontSize:'.84rem',color:'var(--txt)',lineHeight:1.45,fontStyle:'italic',minHeight:40}}>{transcript}</div>}
+        {(transcript||dict.finalText||dict.interimText)&&<div style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10,border:'1px solid var(--lg)',fontSize:'.84rem',lineHeight:1.5,fontStyle:'italic',minHeight:40}}>
+          <span style={{color:'var(--txt)'}}>{dict.finalText||transcript}</span>
+          {dict.interimText&&<span style={{color:'var(--mg)'}}> {dict.interimText}</span>}
+        </div>}
+        {!dict.supported&&<div style={{marginTop:10,padding:'10px 12px',background:'rgba(231,76,60,.08)',border:'1px solid rgba(231,76,60,.25)',borderRadius:10,fontSize:'.8rem',color:'#c0392b',lineHeight:1.4}}>⚠️ Reconnaissance vocale non supportée par ce navigateur. Utilisez Google Chrome (recommandé), Edge ou Safari récent.</div>}
       </>}
 
       {/* Parsed result */}
