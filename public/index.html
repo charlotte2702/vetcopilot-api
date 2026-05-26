@@ -542,7 +542,7 @@ const I={
   Image:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
   Trash:()=><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
 };
-const Em={dog:'🐕',cat:'🐈',bird:'🐦',rabbit:'🐰',hamster:'🐹',horse:'🐴'};
+const Em={dog:'🐕',cat:'🐈',bird:'🐦',rabbit:'🐰',hamster:'🐹',horse:'🐴',lizard:'🦎'};
 
 // ===== DATA =====
 const ANIMALS=[
@@ -945,6 +945,49 @@ function App(){
   // global shortcuts can all read it from Ctx.
   const[voiceOpen,setVoiceOpen]=useState(false);
 
+  // User-created animals. The static ANIMALS const is *mutated in place* on
+  // mount so the dozens of `ANIMALS.find(...)` / `ANIMALS.filter(...)` call
+  // sites in the codebase pick up new patients without per-component plumbing.
+  // The state mirror exists purely to trigger React re-renders + drive
+  // localStorage persistence ('vet.animals.v1').
+  const ANIMALS_KEY='vet.animals.v1';
+  const[customAnimals,setCustomAnimals]=useState(()=>{
+    try{
+      const raw=JSON.parse(localStorage.getItem(ANIMALS_KEY)||'[]');
+      raw.forEach(a=>{if(!ANIMALS.some(x=>x.id===a.id)) ANIMALS.push(a);});
+      return raw;
+    }catch(_){return[];}
+  });
+  const addAnimal=useCallback((draft)=>{
+    const id=Math.max(0,...ANIMALS.map(a=>a.id))+1;
+    const animal={
+      id,
+      nm:draft.nm,
+      sp:draft.sp,
+      breed:draft.breed||'',
+      age:draft.age||'',
+      sex:draft.sex||'M',
+      wt:draft.wt||'',
+      owner:draft.owner||'',
+      phone:draft.phone||'',
+      email:draft.email||'',
+      av:draft.av||'dog',
+      allergy:draft.allergy||[],
+      vacc:[],
+      wts:draft.wt?[{m:'Mai',v:parseFloat(String(draft.wt).replace(',','.'))||0}]:[],
+      hist:[],
+      _custom:true,
+    };
+    ANIMALS.push(animal);
+    setCustomAnimals(prev=>{
+      const next=[...prev,animal];
+      try{localStorage.setItem(ANIMALS_KEY,JSON.stringify(next));}catch(err){console.warn('[addAnimal] localStorage save failed:',err);}
+      console.log('[addAnimal] animal ajouté, ANIMALS total:',ANIMALS.length,'customAnimals total:',next.length);
+      return next;
+    });
+    return animal;
+  },[]);
+
   // User-created appointments. The static APTS const stays untouched (mock
   // "today's" schedule); customApts piles new RDVs created via the modal and
   // persists them in localStorage so the planning survives refreshes.
@@ -1143,7 +1186,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment,customAnimals,addAnimal}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{const u=teamMembers.find(m=>m.id===currentUserId)||teamMembers[0];nav('dashboard');toast(`Bienvenue, ${teamMemberFullName(u)} !`,'tl');}} />
       ) : (
@@ -1733,31 +1776,7 @@ function Modal(){
       <div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="modal-hdr"><h3>{modal.title}</h3><button className="modal-close" onClick={()=>setModal(null)}><I.X/></button></div>
         <div className="modal-body">
-          {modal.type==='newAnimal'&&<>
-            <div className="g2">
-              <div className="fg"><label className="fl">Nom de l'animal</label><input className="fi" placeholder="Ex: Rex"/></div>
-              <div className="fg"><label className="fl">Espèce</label><select className="fi fi-sel"><option>Chien</option><option>Chat</option><option>Perroquet</option><option>Lapin</option><option>Hamster</option><option>Cheval</option><option>Autre</option></select></div>
-            </div>
-            <div className="g2">
-              <div className="fg"><label className="fl">Race</label><input className="fi" placeholder="Ex: Labrador"/></div>
-              <div className="fg"><label className="fl">Date de naissance</label><input className="fi" type="date"/></div>
-            </div>
-            <div className="g2">
-              <div className="fg"><label className="fl">Poids (kg)</label><input className="fi" type="number" step="0.1" placeholder="kg"/></div>
-              <div className="fg"><label className="fl">Sexe</label><select className="fi fi-sel"><option>Mâle</option><option>Femelle</option></select></div>
-            </div>
-            <div className="g2">
-              <div className="fg"><label className="fl">Propriétaire</label><input className="fi" placeholder="Nom du propriétaire"/></div>
-              <div className="fg"><label className="fl">Téléphone</label><input className="fi" placeholder="06 XX XX XX XX"/></div>
-            </div>
-            <div className="fg"><label className="fl">Email propriétaire</label><input className="fi" type="email" placeholder="email@exemple.fr"/></div>
-            <div className="fg"><label className="fl">Allergies connues</label><input className="fi" placeholder="Séparées par des virgules"/></div>
-            <div className="fg"><label className="fl">N° puce électronique</label><input className="fi" placeholder="250269..."/></div>
-            <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
-              <button className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
-              <button className="btn btn-t" onClick={()=>{setModal(null);toast('Animal enregistré avec succès','tl');}}>Enregistrer</button>
-            </div>
-          </>}
+          {modal.type==='newAnimal'&&<NewAnimalForm/>}
           {modal.type==='newApt'&&<NewAptForm prefill={modal.prefill}/>}
           {modal.type==='prescription'&&<>
             <div className="fg"><label className="fl">Patient</label><input className="fi" defaultValue={modal.animal||'Rex — Labrador'} readOnly style={{background:'var(--bg)'}}/></div>
@@ -1852,6 +1871,102 @@ const ACT_TYPES_LIST=['Vaccination','Rappel vaccin','Vermifuge','Détartrage','C
 function isVaccinationType(t){return t==='Vaccination'||t==='Rappel vaccin';}
 function formatDateFR(iso){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso||'');return m?`${m[3]}/${m[2]}/${m[1]}`:iso||'';}
 function addOneYearISO(iso){const d=new Date(iso);if(isNaN(d.getTime())) return '';d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);}
+
+// Species → avatar key (drives the emoji used everywhere).
+const SPECIES_OPTIONS=[
+  {label:'Chien',  sp:'Chien',     av:'dog'},
+  {label:'Chat',   sp:'Chat',      av:'cat'},
+  {label:'NAC',    sp:'NAC',       av:'rabbit'},
+  {label:'Oiseau', sp:'Oiseau',    av:'bird'},
+  {label:'Reptile',sp:'Reptile',   av:'lizard'},
+];
+function NewAnimalForm(){
+  const{addAnimal,setModal,toast,nav}=useContext(Ctx);
+  const[nm,setNm]=useState('');
+  const[spIdx,setSpIdx]=useState(0);
+  const[breed,setBreed]=useState('');
+  const[age,setAge]=useState('');
+  const[sex,setSex]=useState('M');
+  const[wt,setWt]=useState('');
+  const[allergy,setAllergy]=useState('');
+  const[owner,setOwner]=useState('');
+  const[phone,setPhone]=useState('');
+  const species=SPECIES_OPTIONS[spIdx];
+  const submit=(e)=>{
+    e&&e.preventDefault&&e.preventDefault();
+    if(!nm.trim()){toast("Le nom de l'animal est requis",'r');return;}
+    if(typeof addAnimal!=='function'){
+      console.error('[NewAnimalForm] addAnimal manquant dans Ctx — l\'app utilise probablement un HTML en cache. Faites un hard refresh (Cmd+Shift+R).');
+      toast("Version obsolète détectée — rechargez la page (Cmd+Shift+R)",'r');
+      return;
+    }
+    try{
+      const created=addAnimal({
+        nm:nm.trim(),
+        sp:species.sp,
+        av:species.av,
+        breed:breed.trim(),
+        age:age.trim(),
+        sex,
+        wt:wt.trim()?(wt.trim().includes('kg')?wt.trim():`${wt.trim()} kg`):'',
+        owner:owner.trim()||'Propriétaire non renseigné',
+        phone:phone.trim(),
+        allergy:allergy.trim()?allergy.split(',').map(s=>s.trim()).filter(Boolean):[],
+      });
+      if(!created||!created.id){
+        console.error('[NewAnimalForm] addAnimal n\'a pas retourné un animal valide',created);
+        toast("Erreur interne — l'animal n'a pas pu être créé",'r');
+        return;
+      }
+      console.log('[NewAnimalForm] animal créé:',created);
+      setModal(null);
+      toast(`${created.nm} ajouté aux patients`,'tl');
+      nav('animal-detail',created);
+    }catch(err){
+      console.error('[NewAnimalForm] erreur dans addAnimal:',err);
+      toast(`Erreur : ${err.message||err}`,'r');
+    }
+  };
+  return(<form onSubmit={submit}>
+    <div className="g2">
+      <div className="fg"><label className="fl">Nom de l'animal *</label><input className="fi" value={nm} onChange={e=>setNm(e.target.value)} placeholder="Ex: Rex" required autoFocus/></div>
+      <div className="fg"><label className="fl">Espèce</label>
+        <select className="fi fi-sel" value={spIdx} onChange={e=>setSpIdx(Number(e.target.value))}>
+          {SPECIES_OPTIONS.map((s,i)=><option key={s.sp} value={i}>{Em[s.av]||''} {s.label}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Race</label><input className="fi" value={breed} onChange={e=>setBreed(e.target.value)} placeholder="Ex: Labrador"/></div>
+      <div className="fg"><label className="fl">Âge</label><input className="fi" value={age} onChange={e=>setAge(e.target.value)} placeholder="Ex: 5 ans"/></div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Sexe</label>
+        <select className="fi fi-sel" value={sex} onChange={e=>setSex(e.target.value)}>
+          <option value="M">Mâle</option>
+          <option value="F">Femelle</option>
+        </select>
+      </div>
+      <div className="fg"><label className="fl">Poids</label>
+        <div style={{position:'relative'}}>
+          <input className="fi" type="number" step="0.1" min="0" value={wt} onChange={e=>setWt(e.target.value)} placeholder="kg" style={{paddingRight:36}}/>
+          <span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:'.78rem',color:'var(--txt2)',pointerEvents:'none'}}>kg</span>
+        </div>
+      </div>
+    </div>
+    <div className="fg"><label className="fl">Allergies connues <span style={{color:'var(--mg)',fontWeight:400,textTransform:'none',letterSpacing:0}}>(séparées par des virgules)</span></label>
+      <input className="fi" value={allergy} onChange={e=>setAllergy(e.target.value)} placeholder="Ex: Pénicilline, Aspirine"/>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Propriétaire</label><input className="fi" value={owner} onChange={e=>setOwner(e.target.value)} placeholder="M. / Mme Nom"/></div>
+      <div className="fg"><label className="fl">Téléphone</label><input className="fi" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="06 XX XX XX XX"/></div>
+    </div>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:10}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+      <button type="submit" className="btn btn-t"><I.Plus/> Enregistrer</button>
+    </div>
+  </form>);
+}
 
 function NewAptForm({prefill}){
   const{addAppointment,addNotif,customApts,archive,teamMembers,setModal,toast}=useContext(Ctx);
