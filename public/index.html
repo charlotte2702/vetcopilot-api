@@ -805,6 +805,10 @@ function useDictation(){
   const[recording,setRecording]=useState(false);
   const[finalText,setFinalText]=useState('');
   const[interimText,setInterimText]=useState('');
+  const[mode,setMode]=useState(null);          // 'local' | 'cloud' | null
+  const[elapsed,setElapsed]=useState(0);        // seconds since recording started
+  const[transcribing,setTranscribing]=useState(false); // cloud upload in flight
+  // Local (Web Speech API) refs
   const recRef=useRef(null);
   const baseRef=useRef('');
   const finalRef=useRef('');
@@ -812,24 +816,38 @@ function useDictation(){
   const onUpdateRef=useRef(null);
   const onErrorRef=useRef(null);
   const langRef=useRef('fr-FR');
+  // Cloud (MediaRecorder + Whisper) refs
+  const mediaRecRef=useRef(null);
+  const streamRef=useRef(null);
+  const chunksRef=useRef([]);
+  const startTsRef=useRef(0);
+  const timerRef=useRef(null);
 
   const RecognitionClass=(typeof window!=='undefined')&&(window.SpeechRecognition||window.webkitSpeechRecognition);
-  const supported=!!RecognitionClass;
+  const hasWebSpeech=!!RecognitionClass;
+  const hasMediaRecorder=(typeof window!=='undefined')&&!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder);
+  const supported=hasWebSpeech||hasMediaRecorder;
 
-  // Internal launcher — called by `start` (fresh session) AND by the auto-restart
-  // path inside onend (when the browser ends recognition while we're still
-  // supposed to be listening, e.g. Chrome's ~60s silence cutoff).
-  const _launch=useCallback(()=>{
+  // Start an elapsed-time interval. Cleared by stopTimer().
+  const startTimer=()=>{
+    if(timerRef.current) return;
+    startTsRef.current=Date.now();setElapsed(0);
+    timerRef.current=setInterval(()=>setElapsed(Math.floor((Date.now()-startTsRef.current)/1000)),250);
+  };
+  const stopTimer=()=>{
+    if(timerRef.current){clearInterval(timerRef.current);timerRef.current=null;}
+    startTsRef.current=0;
+  };
+
+  // ----- LOCAL PATH: Web Speech API (Chrome / Edge / some Safari builds) -----
+  const _launchLocal=useCallback(()=>{
     if(recRef.current) return;
     const r=new RecognitionClass();
-    r.lang=langRef.current;
-    r.continuous=true;
-    r.interimResults=true;
+    r.lang=langRef.current;r.continuous=true;r.interimResults=true;
 
-    r.onaudiostart=()=>{console.log('[dict] audiostart');};
-    r.onsoundstart=()=>{console.log('[dict] soundstart');};
-    r.onspeechstart=()=>{console.log('[dict] speechstart');};
-    r.onstart=()=>{console.log('[dict] start');setRecording(true);};
+    r.onaudiostart=()=>console.log('[dict.local] audiostart');
+    r.onspeechstart=()=>console.log('[dict.local] speechstart');
+    r.onstart=()=>{console.log('[dict.local] start');setRecording(true);if(!timerRef.current)startTimer();};
 
     r.onresult=(ev)=>{
       let interim='';
@@ -837,83 +855,131 @@ function useDictation(){
         const t=ev.results[i][0].transcript;
         if(ev.results[i].isFinal) finalRef.current+=t; else interim+=t;
       }
-      console.log('[dict] result · final="'+finalRef.current+'" · interim="'+interim+'"');
-      setFinalText(finalRef.current);
-      setInterimText(interim);
-      const base=baseRef.current;
-      const sep=base&&!/\s$/.test(base)?' ':'';
+      console.log('[dict.local] result · final="'+finalRef.current+'" · interim="'+interim+'"');
+      setFinalText(finalRef.current);setInterimText(interim);
+      const base=baseRef.current;const sep=base&&!/\s$/.test(base)?' ':'';
       const combined=base+sep+finalRef.current+interim;
       onUpdateRef.current&&onUpdateRef.current(combined,{final:finalRef.current,interim,combined});
     };
 
     r.onerror=(ev)=>{
-      console.warn('[dict] error',ev.error,ev);
+      console.warn('[dict.local] error',ev.error);
       const msgs={
         'not-allowed':'Accès au micro refusé. Autorisez le micro dans les paramètres du navigateur.',
         'service-not-allowed':'Service de reconnaissance vocale indisponible.',
-        'no-speech':null, // benign — onend will auto-restart
-        'audio-capture':'Aucun micro détecté sur cet appareil.',
-        'network':'Erreur réseau pendant la reconnaissance.',
-        'aborted':null,
+        'no-speech':null,'audio-capture':'Aucun micro détecté.','network':'Erreur réseau.','aborted':null,
       };
       const m=Object.prototype.hasOwnProperty.call(msgs,ev.error)?msgs[ev.error]:'Erreur reconnaissance vocale : '+ev.error;
       if(m) onErrorRef.current&&onErrorRef.current(m);
     };
 
     r.onend=()=>{
-      console.log('[dict] end (userStopped='+userStoppedRef.current+')');
+      console.log('[dict.local] end (userStopped='+userStoppedRef.current+')');
       recRef.current=null;
-      // Chrome cuts off after ~60s of silence. If the user didn't ask us to
-      // stop, restart automatically so dictation feels continuous.
       if(!userStoppedRef.current){
-        console.log('[dict] auto-restart');
-        setTimeout(()=>{ if(!userStoppedRef.current){try{_launch();}catch(e){console.error('[dict] restart failed',e);setRecording(false);}} },80);
+        console.log('[dict.local] auto-restart');
+        setTimeout(()=>{if(!userStoppedRef.current){try{_launchLocal();}catch(e){console.error('[dict.local] restart failed',e);setRecording(false);stopTimer();}}},80);
         return;
       }
-      setRecording(false);
-      setInterimText('');
+      setRecording(false);setInterimText('');stopTimer();
     };
 
+    try{r.start();recRef.current=r;console.log('[dict.local] recognition.start() called, lang='+langRef.current);}
+    catch(err){console.error('[dict.local] start failed',err);onErrorRef.current&&onErrorRef.current('Impossible de démarrer la reconnaissance : '+(err.message||err));}
+  },[]);
+
+  // ----- CLOUD PATH: MediaRecorder → Whisper (Safari / Firefox / mobile) -----
+  const pickMime=()=>{
+    const cands=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus','audio/wav'];
+    if(!window.MediaRecorder||!MediaRecorder.isTypeSupported) return '';
+    for(const m of cands){if(MediaRecorder.isTypeSupported(m)) return m;}
+    return '';
+  };
+  const _launchCloud=useCallback(async()=>{
     try{
-      r.start();
-      recRef.current=r;
-      console.log('[dict] recognition.start() called, lang='+langRef.current);
+      console.log('[dict.cloud] requesting microphone...');
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      streamRef.current=stream;
+      const mime=pickMime();
+      const mr=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+      chunksRef.current=[];
+      mr.ondataavailable=(e)=>{if(e.data&&e.data.size>0)chunksRef.current.push(e.data);};
+      mr.onstart=()=>{console.log('[dict.cloud] recording started, mime='+(mr.mimeType||'(default)'));setRecording(true);startTimer();};
+      mr.onerror=(e)=>{console.warn('[dict.cloud] recorder error',e);onErrorRef.current&&onErrorRef.current('Erreur enregistrement audio');};
+      mr.onstop=async()=>{
+        console.log('[dict.cloud] stopped, chunks='+chunksRef.current.length);
+        stopTimer();setRecording(false);
+        if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
+        if(chunksRef.current.length===0){console.warn('[dict.cloud] no audio captured');return;}
+        const blob=new Blob(chunksRef.current,{type:mr.mimeType||'audio/webm'});
+        if(blob.size<1024){onErrorRef.current&&onErrorRef.current('Enregistrement trop court — réessayez');return;}
+        setTranscribing(true);
+        try{
+          const base64=await new Promise((resolve,reject)=>{
+            const fr=new FileReader();
+            fr.onload=()=>resolve(String(fr.result).split(',')[1]||'');
+            fr.onerror=()=>reject(fr.error||new Error('FileReader error'));
+            fr.readAsDataURL(blob);
+          });
+          console.log('[dict.cloud] posting '+Math.round(blob.size/1024)+' KB to /api/transcribe');
+          const res=await fetch('/api/transcribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({audio:base64,mime:blob.type})});
+          const data=await res.json();
+          if(!res.ok||!data.ok) throw new Error(data.error||'HTTP '+res.status);
+          const txt=(data.text||'').trim();
+          console.log('[dict.cloud] whisper text:',JSON.stringify(txt));
+          finalRef.current=txt;setFinalText(txt);setInterimText('');
+          const base=baseRef.current;const sep=base&&!/\s$/.test(base)?' ':'';
+          onUpdateRef.current&&onUpdateRef.current(base+sep+txt,{final:txt,interim:'',combined:base+sep+txt});
+        }catch(e){
+          console.error('[dict.cloud] transcribe failed:',e);
+          onErrorRef.current&&onErrorRef.current('Transcription échouée : '+(e.message||e));
+        }finally{setTranscribing(false);mediaRecRef.current=null;}
+      };
+      mr.start();mediaRecRef.current=mr;
     }catch(err){
-      console.error('[dict] start failed',err);
-      onErrorRef.current&&onErrorRef.current('Impossible de démarrer la reconnaissance : '+(err.message||err));
+      console.error('[dict.cloud] getUserMedia failed:',err);
+      const msg=err.name==='NotAllowedError'?'Accès au micro refusé. Autorisez le micro dans les paramètres du navigateur.'
+              :err.name==='NotFoundError'?'Aucun micro détecté sur cet appareil.'
+              :'Impossible d\'accéder au micro : '+(err.message||err);
+      onErrorRef.current&&onErrorRef.current(msg);
+      setRecording(false);stopTimer();
     }
   },[]);
 
   const start=useCallback(({baseText='',onUpdate,onError,lang='fr-FR'}={})=>{
     if(!supported){
-      console.warn('[dict] not supported in this browser');
-      onError&&onError('Navigateur non compatible avec la reconnaissance vocale — utilisez Chrome, Edge ou Safari récent.');
+      console.warn('[dict] not supported in this browser (no Web Speech AND no MediaRecorder)');
+      onError&&onError('Navigateur non compatible — utilisez Chrome, Safari ou Firefox récent.');
       return;
     }
-    if(recRef.current){console.log('[dict] start ignored, already running');return;}
+    if(recRef.current||mediaRecRef.current){console.log('[dict] start ignored, already running');return;}
     baseRef.current=baseText;
     finalRef.current='';
     userStoppedRef.current=false;
     onUpdateRef.current=onUpdate;
     onErrorRef.current=onError;
     langRef.current=lang;
-    setFinalText('');
-    setInterimText('');
-    _launch();
-  },[supported,_launch]);
+    setFinalText('');setInterimText('');setElapsed(0);setTranscribing(false);
+    if(hasWebSpeech){setMode('local');_launchLocal();}
+    else{setMode('cloud');_launchCloud();}
+  },[supported,hasWebSpeech,_launchLocal,_launchCloud]);
 
   const stop=useCallback(()=>{
-    console.log('[dict] user stop');
+    console.log('[dict] user stop, mode='+(recRef.current?'local':mediaRecRef.current?'cloud':'none'));
     userStoppedRef.current=true;
     if(recRef.current){try{recRef.current.stop();}catch(_){}}
+    if(mediaRecRef.current){try{mediaRecRef.current.stop();}catch(_){}}
   },[]);
 
   useEffect(()=>()=>{
     userStoppedRef.current=true;
     if(recRef.current){try{recRef.current.abort();}catch(_){}}
+    if(mediaRecRef.current){try{mediaRecRef.current.stop();}catch(_){}}
+    if(streamRef.current){try{streamRef.current.getTracks().forEach(t=>t.stop());}catch(_){}}
+    stopTimer();
   },[]);
 
-  return{recording,supported,start,stop,finalText,interimText};
+  return{recording,supported,start,stop,finalText,interimText,mode,elapsed,transcribing,hasWebSpeech,hasMediaRecorder};
 }
 
 // ===== LOGO =====
@@ -5362,11 +5428,11 @@ function normNm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/
 const VOICE_ACT_LABEL={vaccination:'Vaccination',consultation:'Consultation',vermifuge:'Vermifuge',detartrage:'Détartrage',controle:'Contrôle',chirurgie:'Chirurgie',urgence:'Urgence',autre:'Autre'};
 
 function VoiceCapture(){
-  const{voiceOpen,setVoiceOpen,toast,addManualAct,archive}=useContext(Ctx);
+  const{voiceOpen,setVoiceOpen,toast,addManualAct,addAppointment,addNotif,archive}=useContext(Ctx);
   const[transcript,setTranscript]=useState('');
   const[parsed,setParsed]=useState(null);
   const[selectedAnimalId,setSelectedAnimalId]=useState(null);
-  const[step,setStep]=useState('idle'); // idle | recording | sending | parsed
+  const[step,setStep]=useState('idle'); // idle | recording | waiting | sending | parsed
   const[editing,setEditing]=useState(false);
   const dict=useDictation();
   // Mirror state in a ref so stopMic's setTimeout reads the latest value
@@ -5376,23 +5442,31 @@ function VoiceCapture(){
 
   const activeAnimals=useMemo(()=>ANIMALS.filter(a=>!(archive||{})[a.id]),[archive]);
 
+  // New backend schema: { action, acte: {...}|null, rdv: {...}|null }.
+  // Fall back to legacy flat shape if `action` is missing.
+  const action=parsed?.action||(parsed?(parsed.acte||parsed.rdv?'both':'acte'):null);
+  const acteData=parsed?.acte||(parsed&&!parsed.action?parsed:null);
+  const rdvData=parsed?.rdv||null;
+  const hasActe=action==='acte'||action==='both';
+  const hasRdv=action==='rdv'||action==='both';
+  const primaryAnimalName=(hasActe&&acteData?.animalName)||(hasRdv&&rdvData?.animalName)||null;
+
   const findAnimal=useCallback((name)=>{
     if(!name) return null;
     const n=normNm(name);
     return activeAnimals.find(a=>normNm(a.nm)===n)||null;
   },[activeAnimals]);
 
-  // When no exact match, surface up to 3 candidates ranked by name overlap.
   const candidates=useMemo(()=>{
-    if(!parsed||!parsed.animalName||selectedAnimalId) return [];
-    const n=normNm(parsed.animalName);
+    if(!parsed||!primaryAnimalName||selectedAnimalId) return [];
+    const n=normNm(primaryAnimalName);
     return activeAnimals
       .map(a=>{const an=normNm(a.nm);let score=0;if(an===n)score=100;else if(an.startsWith(n.slice(0,3)))score=50;else if(an.includes(n)||n.includes(an))score=30;else if(an[0]===n[0])score=10;return{a,score};})
       .filter(x=>x.score>0)
       .sort((x,y)=>y.score-x.score)
       .slice(0,3)
       .map(x=>x.a);
-  },[parsed,selectedAnimalId,activeAnimals]);
+  },[parsed,primaryAnimalName,selectedAnimalId,activeAnimals]);
 
   const reset=useCallback(()=>{
     setTranscript('');setParsed(null);setSelectedAnimalId(null);setStep('idle');setEditing(false);
@@ -5413,52 +5487,100 @@ function VoiceCapture(){
     });
   };
 
-  const parseTranscript=async(text)=>{
+  const parseTranscript=useCallback(async(text)=>{
     if(!text||!text.trim()){toast('Aucun texte à analyser — réessayez en parlant plus clairement','r');setStep('idle');return;}
     setStep('sending');
     try{
       const r=await fetch('/api/voice-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
       const d=await r.json();
       if(!d.ok) throw new Error(d.error||'Erreur IA');
-      setParsed(d.parsed||{});
-      const matched=findAnimal((d.parsed||{}).animalName);
+      const p=d.parsed||{};
+      setParsed(p);
+      // Resolve animal from whichever block is populated.
+      const nm=(p.acte&&p.acte.animalName)||(p.rdv&&p.rdv.animalName)||p.animalName||null;
+      const matched=findAnimal(nm);
       setSelectedAnimalId(matched?matched.id:null);
       setStep('parsed');
     }catch(e){toast('Erreur IA : '+(e.message||e),'r');setStep('idle');}
-  };
+  },[findAnimal,toast]);
 
   const stopMic=()=>{
     dict.stop();
-    // Wait for the last onresult/onend to fire so transcriptRef has the final value.
-    setTimeout(()=>{
-      const text=transcriptRef.current||transcript;
-      console.log('[VoiceCapture] stop · final transcript:',JSON.stringify(text));
-      parseTranscript(text);
-    },300);
+    if(dict.mode==='cloud'){
+      // MediaRecorder.onstop → Whisper upload is async (1-3s). Park in 'waiting';
+      // the useEffect below picks it up when dict.transcribing becomes false.
+      setStep('waiting');
+    }else{
+      setTimeout(()=>{
+        const text=transcriptRef.current||transcript;
+        console.log('[VoiceCapture] stop (local) · transcript:',JSON.stringify(text));
+        parseTranscript(text);
+      },300);
+    }
   };
+
+  // Cloud completion watcher: when MediaRecorder + Whisper finish, finalText
+  // is populated and transcribing flips to false. Trigger the IA parse then.
+  useEffect(()=>{
+    if(step==='waiting'&&!dict.recording&&!dict.transcribing){
+      const text=dict.finalText||transcriptRef.current;
+      console.log('[VoiceCapture] cloud done · transcript:',JSON.stringify(text));
+      parseTranscript(text);
+    }
+  },[step,dict.recording,dict.transcribing,dict.finalText,parseTranscript]);
 
   const validate=()=>{
     if(!parsed||!selectedAnimalId){toast('Sélectionnez un patient avant de valider','r');return;}
     const animal=activeAnimals.find(a=>a.id===selectedAnimalId);
     if(!animal) return;
-    const dateISO=parsed.date||new Date().toISOString().slice(0,10);
-    const act={
-      date:dateISO,
-      dateDisplay:formatDateFR(dateISO),
-      type:VOICE_ACT_LABEL[parsed.actType]||'Autre',
-      vet:parsed.vetName||'Dr. Patrick Hayot',
-      notes:parsed.notes||'',
-      ...(parsed.weight?{weight:Number(parsed.weight)}:{}),
-      ...(parsed.vaccineName?{vaccineName:parsed.vaccineName}:{}),
-      ...(parsed.nextVisit?{nextDate:formatDateFR(parsed.nextVisit),nextDateISO:parsed.nextVisit}:{}),
-    };
-    addManualAct(animal.id,act);
-    toast(`Acte ajouté à la fiche de ${animal.nm}`,'tl');
+    const messages=[];
+
+    // ---- ACTE (passé) → addManualAct
+    if(hasActe&&acteData){
+      const dateISO=acteData.date||new Date().toISOString().slice(0,10);
+      const act={
+        date:dateISO,
+        dateDisplay:formatDateFR(dateISO),
+        type:VOICE_ACT_LABEL[acteData.actType]||'Autre',
+        vet:acteData.vetName||'Dr. Patrick Hayot',
+        notes:acteData.notes||'',
+        ...(acteData.weight?{weight:Number(acteData.weight)}:{}),
+        ...(acteData.vaccineName?{vaccineName:acteData.vaccineName}:{}),
+        ...(acteData.nextVisit?{nextDate:formatDateFR(acteData.nextVisit),nextDateISO:acteData.nextVisit}:{}),
+      };
+      addManualAct(animal.id,act);
+      messages.push(`Acte ajouté à la fiche de ${animal.nm}`);
+    }
+
+    // ---- RDV (futur) → addAppointment + addNotif
+    if(hasRdv&&rdvData){
+      const meta=APT_TYPES.find(t=>t.v===rdvData.type)||APT_TYPES[0];
+      const apt={
+        id:'apt-'+Date.now(),
+        t:rdvData.time||'09:00',
+        date:rdvData.date||new Date().toISOString().slice(0,10),
+        dur:Number(rdvData.duration)||30,
+        nm:animal.nm,own:animal.owner,av:animal.av,
+        rsn:rdvData.type||'Consultation',type:rdvData.type||'Consultation',
+        vet:rdvData.vetName||'Dr. Patrick Hayot',
+        st:meta.st,color:meta.color,
+        notes:rdvData.notes||'',
+      };
+      addAppointment&&addAppointment(apt);
+      addNotif&&addNotif({id:apt.id+'-created',type:'apt',title:'Nouveau RDV planifié',text:`${animal.nm} · ${apt.type} · ${apt.date} à ${apt.t} · ${apt.vet}`,time:"À l'instant",unread:true});
+      messages.push(`RDV planifié pour ${animal.nm} le ${formatDateFR(apt.date)} à ${apt.t}`);
+    }
+
+    if(messages.length===0){toast('Rien à enregistrer','r');return;}
+    messages.forEach(m=>toast(m,'tl'));
     reset();
     setVoiceOpen(false);
   };
 
-  const setField=(k,v)=>setParsed(p=>({...(p||{}),[k]:v}));
+  // setField writes into either `parsed.acte` or `parsed.rdv` depending on which
+  // block is being edited (pre-validate "Corriger" mode).
+  const setActeField=(k,v)=>setParsed(p=>({...(p||{}),acte:{...(p?.acte||{}),[k]:v}}));
+  const setRdvField =(k,v)=>setParsed(p=>({...(p||{}),rdv: {...(p?.rdv ||{}),[k]:v}}));
 
   if(!voiceOpen){
     return <button onClick={()=>setVoiceOpen(true)} aria-label="Saisie vocale rapide" title="Saisie vocale rapide"
@@ -5487,20 +5609,34 @@ function VoiceCapture(){
       {/* Idle / recording state */}
       {(step==='idle'||isRecording||isSending)&&<>
         <div style={{textAlign:'center',marginBottom:14}}>
-          <button onClick={isRecording?stopMic:startMic} disabled={isSending}
-            style={{width:96,height:96,borderRadius:'50%',border:'none',cursor:isSending?'wait':'pointer',background:isRecording?'linear-gradient(135deg,#e74c3c,#c0392b)':'linear-gradient(135deg,#C8A45C,#a88947)',color:'#fff',fontSize:36,boxShadow:isRecording?'0 0 0 8px rgba(231,76,60,.18)':'0 6px 20px rgba(200,164,92,.35)',transition:'all .2s',position:'relative'}}>
-            {isSending?<div style={{width:24,height:24,border:'3px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/>:isRecording?'⏹':'🎙️'}
+          <button onClick={isRecording?stopMic:startMic} disabled={isSending||dict.transcribing}
+            style={{width:96,height:96,borderRadius:'50%',border:'none',cursor:(isSending||dict.transcribing)?'wait':'pointer',background:isRecording?'linear-gradient(135deg,#e74c3c,#c0392b)':'linear-gradient(135deg,#C8A45C,#a88947)',color:'#fff',fontSize:36,boxShadow:isRecording?'0 0 0 8px rgba(231,76,60,.18)':'0 6px 20px rgba(200,164,92,.35)',transition:'all .2s',position:'relative',animation:isRecording?'pulse-rec 1.4s ease-in-out infinite':'none'}}>
+            {(isSending||dict.transcribing)?<div style={{width:24,height:24,border:'3px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/>:isRecording?'⏹':'🎙️'}
           </button>
-          <div style={{fontSize:'.84rem',color:'var(--txt)',marginTop:12,fontWeight:600}}>
-            {isSending?'Analyse en cours...':isRecording?'À l\'écoute — cliquez pour arrêter':'Cliquez pour parler'}
+          <style>{`@keyframes pulse-rec{0%,100%{box-shadow:0 0 0 8px rgba(231,76,60,.18)}50%{box-shadow:0 0 0 14px rgba(231,76,60,.08)}}`}</style>
+          <div style={{fontSize:'.84rem',color:'var(--txt)',marginTop:12,fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center',gap:8,flexWrap:'wrap'}}>
+            {dict.transcribing?<><span>Transcription en cours...</span></>
+              :isSending?'Analyse en cours...'
+              :isRecording?<><span>À l'écoute — cliquez pour arrêter</span><span style={{fontFamily:'monospace',padding:'2px 8px',background:'rgba(231,76,60,.12)',color:'#c0392b',borderRadius:8,fontSize:'.78rem'}}>{String(Math.floor(dict.elapsed/60)).padStart(2,'0')}:{String(dict.elapsed%60).padStart(2,'0')}</span></>
+              :'Cliquez pour parler'}
           </div>
-          {!isRecording&&!isSending&&<div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:6,lineHeight:1.45,padding:'0 8px'}}>Ex : "Rex est venu pour son rappel CHPL, 32 kilos, tout va bien, prochaine visite dans un an"</div>}
+          {/* Mode indicator */}
+          {dict.mode&&isRecording&&<div style={{marginTop:8,fontSize:'.7rem',color:'var(--txt2)',display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+            {dict.mode==='local'
+              ? <><span style={{color:'#16a34a'}}>●</span> Reconnaissance locale (Web Speech)</>
+              : <><span style={{color:'#3498db'}}>●</span> Transcription cloud (Whisper)</>}
+          </div>}
+          {!isRecording&&!isSending&&!dict.transcribing&&<div style={{fontSize:'.74rem',color:'var(--txt2)',marginTop:6,lineHeight:1.45,padding:'0 8px'}}>Ex : "Rex est venu pour son rappel CHPL, 32 kilos, tout va bien, prochaine visite dans un an"</div>}
         </div>
         {(transcript||dict.finalText||dict.interimText)&&<div style={{padding:'10px 12px',background:'var(--bg)',borderRadius:10,border:'1px solid var(--lg)',fontSize:'.84rem',lineHeight:1.5,fontStyle:'italic',minHeight:40}}>
           <span style={{color:'var(--txt)'}}>{dict.finalText||transcript}</span>
           {dict.interimText&&<span style={{color:'var(--mg)'}}> {dict.interimText}</span>}
         </div>}
-        {!dict.supported&&<div style={{marginTop:10,padding:'10px 12px',background:'rgba(231,76,60,.08)',border:'1px solid rgba(231,76,60,.25)',borderRadius:10,fontSize:'.8rem',color:'#c0392b',lineHeight:1.4}}>⚠️ Reconnaissance vocale non supportée par ce navigateur. Utilisez Google Chrome (recommandé), Edge ou Safari récent.</div>}
+        {dict.transcribing&&<div style={{marginTop:10,padding:'10px 12px',background:'rgba(52,152,219,.08)',border:'1px solid rgba(52,152,219,.25)',borderRadius:10,fontSize:'.84rem',color:'#2980b9',display:'flex',gap:8,alignItems:'center'}}>
+          <div style={{width:14,height:14,border:'2px solid rgba(41,128,185,.3)',borderTopColor:'#2980b9',borderRadius:'50%',animation:'spin .6s linear infinite'}}/>
+          <span>Transcription par Whisper en cours...</span>
+        </div>}
+        {!dict.supported&&<div style={{marginTop:10,padding:'10px 12px',background:'rgba(231,76,60,.08)',border:'1px solid rgba(231,76,60,.25)',borderRadius:10,fontSize:'.8rem',color:'#c0392b',lineHeight:1.4}}>⚠️ Navigateur non compatible — utilisez Chrome, Safari ou Firefox récent.</div>}
       </>}
 
       {/* Parsed result */}
@@ -5518,7 +5654,7 @@ function VoiceCapture(){
               </div>:null;})()
             : <div>
                 <div style={{padding:'10px 12px',background:'rgba(231,76,60,.06)',border:'1px solid rgba(231,76,60,.25)',borderRadius:10,fontSize:'.82rem',color:'var(--txt)',marginBottom:8}}>
-                  {parsed.animalName?<>Aucune correspondance pour <strong>{parsed.animalName}</strong>. Sélectionnez le patient :</>:<>Aucun patient mentionné — choisissez :</>}
+                  {primaryAnimalName?<>Aucune correspondance pour <strong>{primaryAnimalName}</strong>. Sélectionnez le patient :</>:<>Aucun patient mentionné — choisissez :</>}
                 </div>
                 {(candidates.length>0?candidates:activeAnimals.slice(0,6)).map(a=>(
                   <button key={a.id} type="button" onClick={()=>setSelectedAnimalId(a.id)} style={{display:'flex',width:'100%',alignItems:'center',gap:10,padding:'8px 10px',background:'var(--card)',border:'1px solid var(--lg)',borderRadius:8,cursor:'pointer',marginBottom:4,textAlign:'left',fontFamily:'inherit'}}
@@ -5532,35 +5668,73 @@ function VoiceCapture(){
           }
         </div>
 
-        {/* Parsed fields preview / editor */}
-        <div style={{padding:'12px 14px',background:'var(--bg)',borderRadius:10,marginBottom:14}}>
+        {/* ACTE card (passé) */}
+        {hasActe&&acteData&&<div style={{padding:'12px 14px',background:'rgba(43,160,143,.06)',border:'1px solid rgba(43,160,143,.25)',borderRadius:10,marginBottom:10}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,fontSize:'.7rem',fontWeight:700,color:'var(--t)',textTransform:'uppercase',letterSpacing:'.06em'}}>📋 Acte clinique</div>
           {editing?<>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Date</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={parsed.date||''} onChange={e=>setField('date',e.target.value)}/></div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Date</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={acteData.date||''} onChange={e=>setActeField('date',e.target.value)}/></div>
               <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Type</label>
-                <select className="fi fi-sel" style={{padding:'6px 10px',fontSize:'.82rem'}} value={parsed.actType||'autre'} onChange={e=>setField('actType',e.target.value)}>
+                <select className="fi fi-sel" style={{padding:'6px 10px',fontSize:'.82rem'}} value={acteData.actType||'autre'} onChange={e=>setActeField('actType',e.target.value)}>
                   {Object.entries(VOICE_ACT_LABEL).map(([k,v])=><option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
             </div>
-            {parsed.actType==='vaccination'&&<div style={{marginBottom:8}}><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Vaccin</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} value={parsed.vaccineName||''} onChange={e=>setField('vaccineName',e.target.value)} placeholder="Nom du vaccin"/></div>}
+            {acteData.actType==='vaccination'&&<div style={{marginBottom:8}}><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Vaccin</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} value={acteData.vaccineName||''} onChange={e=>setActeField('vaccineName',e.target.value)}/></div>}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Poids (kg)</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="number" step="0.1" value={parsed.weight||''} onChange={e=>setField('weight',e.target.value?Number(e.target.value):null)}/></div>
-              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Prochain RDV</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={parsed.nextVisit||''} onChange={e=>setField('nextVisit',e.target.value)}/></div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Poids (kg)</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="number" step="0.1" value={acteData.weight||''} onChange={e=>setActeField('weight',e.target.value?Number(e.target.value):null)}/></div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Rappel</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={acteData.nextVisit||''} onChange={e=>setActeField('nextVisit',e.target.value)}/></div>
             </div>
-            <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Notes</label><textarea className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} rows={2} value={parsed.notes||''} onChange={e=>setField('notes',e.target.value)}/></div>
-          </>:<>
-            <div style={{display:'grid',gridTemplateColumns:'80px 1fr',rowGap:6,columnGap:10,fontSize:'.82rem'}}>
-              <div style={{color:'var(--txt2)'}}>Type</div><div style={{color:'var(--txt)',fontWeight:600}}>{VOICE_ACT_LABEL[parsed.actType]||'Non précisé'}</div>
-              <div style={{color:'var(--txt2)'}}>Date</div><div style={{color:'var(--txt)'}}>{parsed.date?formatDateFR(parsed.date):"Aujourd'hui (par défaut)"}</div>
-              {parsed.vaccineName&&<><div style={{color:'var(--txt2)'}}>Vaccin</div><div style={{color:'var(--txt)',fontWeight:600}}>{parsed.vaccineName}</div></>}
-              {parsed.weight!=null&&<><div style={{color:'var(--txt2)'}}>Poids</div><div style={{color:'var(--txt)'}}>{parsed.weight} kg</div></>}
-              {parsed.nextVisit&&<><div style={{color:'var(--txt2)'}}>Rappel</div><div style={{color:'var(--txt)'}}>{formatDateFR(parsed.nextVisit)}</div></>}
-              {parsed.vetName&&<><div style={{color:'var(--txt2)'}}>Vétérinaire</div><div style={{color:'var(--txt)'}}>{parsed.vetName}</div></>}
-              {parsed.notes&&<><div style={{color:'var(--txt2)'}}>Notes</div><div style={{color:'var(--txt)',lineHeight:1.45}}>{parsed.notes}</div></>}
+            <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Notes</label><textarea className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} rows={2} value={acteData.notes||''} onChange={e=>setActeField('notes',e.target.value)}/></div>
+          </>:<div style={{display:'grid',gridTemplateColumns:'80px 1fr',rowGap:6,columnGap:10,fontSize:'.82rem'}}>
+            <div style={{color:'var(--txt2)'}}>Type</div><div style={{color:'var(--txt)',fontWeight:600}}>{VOICE_ACT_LABEL[acteData.actType]||'Non précisé'}</div>
+            <div style={{color:'var(--txt2)'}}>Date</div><div style={{color:'var(--txt)'}}>{acteData.date?formatDateFR(acteData.date):"Aujourd'hui (par défaut)"}</div>
+            {acteData.vaccineName&&<><div style={{color:'var(--txt2)'}}>Vaccin</div><div style={{color:'var(--txt)',fontWeight:600}}>{acteData.vaccineName}</div></>}
+            {acteData.weight!=null&&<><div style={{color:'var(--txt2)'}}>Poids</div><div style={{color:'var(--txt)'}}>{acteData.weight} kg</div></>}
+            {acteData.nextVisit&&<><div style={{color:'var(--txt2)'}}>Rappel</div><div style={{color:'var(--txt)'}}>{formatDateFR(acteData.nextVisit)}</div></>}
+            {acteData.vetName&&<><div style={{color:'var(--txt2)'}}>Vétérinaire</div><div style={{color:'var(--txt)'}}>{acteData.vetName}</div></>}
+            {acteData.notes&&<><div style={{color:'var(--txt2)'}}>Notes</div><div style={{color:'var(--txt)',lineHeight:1.45}}>{acteData.notes}</div></>}
+          </div>}
+        </div>}
+
+        {/* RDV card (futur) */}
+        {hasRdv&&rdvData&&<div style={{padding:'12px 14px',background:'rgba(200,164,92,.08)',border:'1px solid rgba(200,164,92,.3)',borderRadius:10,marginBottom:14}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,fontSize:'.7rem',fontWeight:700,color:'#a88947',textTransform:'uppercase',letterSpacing:'.06em'}}>📅 Rendez-vous à planifier</div>
+          {editing?<>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Date</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} type="date" value={rdvData.date||''} onChange={e=>setRdvField('date',e.target.value)}/></div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Heure</label>
+                <select className="fi fi-sel" style={{padding:'6px 10px',fontSize:'.82rem'}} value={rdvData.time||'09:00'} onChange={e=>setRdvField('time',e.target.value)}>
+                  {APT_TIME_SLOTS.map(s=><option key={s}>{s}</option>)}
+                </select>
+              </div>
             </div>
-          </>}
-        </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Type</label>
+                <select className="fi fi-sel" style={{padding:'6px 10px',fontSize:'.82rem'}} value={rdvData.type||'Consultation'} onChange={e=>setRdvField('type',e.target.value)}>
+                  {APT_TYPES.map(t=><option key={t.v}>{t.v}</option>)}
+                </select>
+              </div>
+              <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Durée (min)</label>
+                <select className="fi fi-sel" style={{padding:'6px 10px',fontSize:'.82rem'}} value={rdvData.duration||30} onChange={e=>setRdvField('duration',Number(e.target.value))}>
+                  {APT_DURATIONS.map(d=><option key={d.v} value={d.v}>{d.l}</option>)}
+                </select>
+              </div>
+            </div>
+            <div><label style={{fontSize:'.66rem',fontWeight:700,color:'var(--mg)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Vétérinaire</label><input className="fi" style={{padding:'6px 10px',fontSize:'.82rem'}} value={rdvData.vetName||''} onChange={e=>setRdvField('vetName',e.target.value)} placeholder="Dr. ..."/></div>
+          </>:(()=>{
+            const dateStr=rdvData.date?new Date(rdvData.date+'T00:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'}):'Date non précisée';
+            return(<div style={{fontSize:'.92rem',color:'var(--txt)',lineHeight:1.6}}>
+              <div style={{textTransform:'capitalize',fontWeight:600,marginBottom:6}}>{dateStr}{rdvData.time?` à ${rdvData.time}`:''}</div>
+              <div style={{display:'grid',gridTemplateColumns:'80px 1fr',rowGap:5,columnGap:10,fontSize:'.82rem'}}>
+                <div style={{color:'var(--txt2)'}}>Type</div><div style={{color:'var(--txt)',fontWeight:600}}>{rdvData.type||'Consultation'}</div>
+                {rdvData.duration&&<><div style={{color:'var(--txt2)'}}>Durée</div><div style={{color:'var(--txt)'}}>{rdvData.duration} min</div></>}
+                {rdvData.vetName&&<><div style={{color:'var(--txt2)'}}>Vétérinaire</div><div style={{color:'var(--txt)'}}>{rdvData.vetName}</div></>}
+                {rdvData.notes&&<><div style={{color:'var(--txt2)'}}>Motif</div><div style={{color:'var(--txt)',lineHeight:1.45}}>{rdvData.notes}</div></>}
+              </div>
+            </div>);
+          })()}
+        </div>}
       </>}
     </div>
 
@@ -5568,7 +5742,7 @@ function VoiceCapture(){
     {isParsed&&<div style={{padding:'12px 16px',borderTop:'1px solid var(--lg)',display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
       <button className="btn btn-ghost btn-sm" onClick={reset}>Recommencer</button>
       <button className="btn btn-o btn-sm" onClick={()=>setEditing(e=>!e)}>{editing?'Aperçu':'✏️ Corriger'}</button>
-      <button className="btn btn-t btn-sm" onClick={validate} disabled={!selectedAnimalId}><I.Check/> Ajouter à la fiche</button>
+      <button className="btn btn-t btn-sm" onClick={validate} disabled={!selectedAnimalId}><I.Check/> {action==='rdv'?'Confirmer le RDV':action==='both'?'Confirmer acte + RDV':'Ajouter à la fiche'}</button>
     </div>}
     {(step==='idle'||isRecording)&&transcript&&!isParsed&&<div style={{padding:'12px 16px',borderTop:'1px solid var(--lg)',display:'flex',gap:8,justifyContent:'flex-end'}}>
       <button className="btn btn-ghost btn-sm" onClick={()=>{setTranscript('');if(dict.recording)dict.stop();}}>Effacer</button>
