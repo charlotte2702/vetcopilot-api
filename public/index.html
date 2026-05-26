@@ -958,6 +958,87 @@ function App(){
       return raw;
     }catch(_){return[];}
   });
+  // Overrides + deletions for editing existing mock animals (the const ANIMALS
+  // array is mutated in place; these state slices drive persistence + React
+  // re-renders).
+  const ANIMAL_OVERRIDES_KEY='vet.animalOverrides.v1';
+  const ANIMAL_DELETED_KEY='vet.animalsDeleted.v1';
+  const[animalOverrides,setAnimalOverrides]=useState(()=>{
+    try{
+      const raw=JSON.parse(localStorage.getItem(ANIMAL_OVERRIDES_KEY)||'{}');
+      // Apply overrides to ANIMALS at mount
+      Object.entries(raw).forEach(([id,patch])=>{
+        const a=ANIMALS.find(x=>x.id===Number(id));
+        if(a) Object.assign(a,patch);
+      });
+      return raw;
+    }catch(_){return{};}
+  });
+  const[deletedAnimalIds,setDeletedAnimalIds]=useState(()=>{
+    try{
+      const raw=JSON.parse(localStorage.getItem(ANIMAL_DELETED_KEY)||'[]');
+      // Remove deleted entries from ANIMALS at mount
+      raw.forEach(id=>{
+        const idx=ANIMALS.findIndex(a=>a.id===Number(id));
+        if(idx>=0) ANIMALS.splice(idx,1);
+      });
+      return new Set(raw.map(Number));
+    }catch(_){return new Set();}
+  });
+
+  // Short French month for new weight points (matches existing wts shape).
+  const FR_SHORT_MONTH=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc'];
+  const updateAnimal=useCallback((id,patch)=>{
+    const animal=ANIMALS.find(a=>a.id===Number(id));
+    if(!animal) return null;
+    const oldWt=parseFloat(String(animal.wt||'').replace(',','.'));
+    Object.assign(animal,patch);
+    // Auto-append a weight point if the weight actually changed
+    const newWt=parseFloat(String(animal.wt||'').replace(',','.'));
+    if(!isNaN(newWt)&&newWt>0&&newWt!==oldWt){
+      const m=FR_SHORT_MONTH[new Date().getMonth()];
+      animal.wts=Array.isArray(animal.wts)?[...animal.wts]:[];
+      const last=animal.wts[animal.wts.length-1];
+      if(last&&last.m===m) last.v=newWt;
+      else animal.wts.push({m,v:newWt});
+    }
+    if(animal._custom){
+      // Sync customAnimals state too so localStorage stays correct.
+      setCustomAnimals(prev=>{
+        const next=prev.map(a=>a.id===animal.id?{...animal}:a);
+        try{localStorage.setItem(ANIMALS_KEY,JSON.stringify(next));}catch(_){}
+        return next;
+      });
+    }else{
+      setAnimalOverrides(prev=>{
+        const next={...prev,[id]:{...(prev[id]||{}),...patch,...(animal.wts?{wts:animal.wts}:{})}};
+        try{localStorage.setItem(ANIMAL_OVERRIDES_KEY,JSON.stringify(next));}catch(_){}
+        return next;
+      });
+    }
+    return animal;
+  },[]);
+  const deleteAnimal=useCallback((id)=>{
+    const idx=ANIMALS.findIndex(a=>a.id===Number(id));
+    if(idx<0) return false;
+    const animal=ANIMALS[idx];
+    ANIMALS.splice(idx,1);
+    if(animal._custom){
+      setCustomAnimals(prev=>{
+        const next=prev.filter(a=>a.id!==animal.id);
+        try{localStorage.setItem(ANIMALS_KEY,JSON.stringify(next));}catch(_){}
+        return next;
+      });
+    }else{
+      setDeletedAnimalIds(prev=>{
+        const next=new Set(prev);next.add(animal.id);
+        try{localStorage.setItem(ANIMAL_DELETED_KEY,JSON.stringify([...next]));}catch(_){}
+        return next;
+      });
+    }
+    return true;
+  },[]);
+
   const addAnimal=useCallback((draft)=>{
     const id=Math.max(0,...ANIMALS.map(a=>a.id))+1;
     const animal={
@@ -1186,7 +1267,7 @@ function App(){
   const showLogin = !IS_EMBED && page === 'login';
 
   return(
-    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment,customAnimals,addAnimal}}>
+    <Ctx.Provider value={{page,nav,selAnimal,setSelAnimal,chatOpen,setChatOpen,notifOpen,setNotifOpen,toast,modal,setModal,dark,setDark,searchOpen,setSearchOpen,notifs,addNotif,markAllRead,chatMessages,setChatMessages,chatSending,setChatSending,animalPhotos,setAnimalPhoto,removeAnimalPhoto,invoices,invoicesLoading,addInvoice,updateInvoiceStatus,prefs,setPref,userPhotos,setUserPhoto,currentUserId,switchUser,teamMembers,addTeamMember,archive,archiveAnimal,reactivateAnimal,manualActs,addManualAct,voiceOpen,setVoiceOpen,customApts,addAppointment,removeAppointment,customAnimals,addAnimal,updateAnimal,deleteAnimal}}>
       {showLogin ? (
         <LoginPage onLogin={()=>{const u=teamMembers.find(m=>m.id===currentUserId)||teamMembers[0];nav('dashboard');toast(`Bienvenue, ${teamMemberFullName(u)} !`,'tl');}} />
       ) : (
@@ -1777,6 +1858,7 @@ function Modal(){
         <div className="modal-hdr"><h3>{modal.title}</h3><button className="modal-close" onClick={()=>setModal(null)}><I.X/></button></div>
         <div className="modal-body">
           {modal.type==='newAnimal'&&<NewAnimalForm/>}
+          {modal.type==='editAnimal'&&<EditAnimalForm animalId={modal.animalId}/>}
           {modal.type==='newApt'&&<NewAptForm prefill={modal.prefill}/>}
           {modal.type==='prescription'&&<>
             <div className="fg"><label className="fl">Patient</label><input className="fi" defaultValue={modal.animal||'Rex — Labrador'} readOnly style={{background:'var(--bg)'}}/></div>
@@ -1964,6 +2046,112 @@ function NewAnimalForm(){
     <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:10}}>
       <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
       <button type="submit" className="btn btn-t"><I.Plus/> Enregistrer</button>
+    </div>
+  </form>);
+}
+
+function EditAnimalForm({animalId}){
+  const{updateAnimal,setModal,toast,setSelAnimal}=useContext(Ctx);
+  const animal=ANIMALS.find(a=>a.id===Number(animalId));
+  // Pre-fill all form fields from the existing animal.
+  const initialSpIdx=Math.max(0,SPECIES_OPTIONS.findIndex(s=>s.sp===animal?.sp||s.av===animal?.av));
+  const[nm,setNm]=useState(animal?.nm||'');
+  const[spIdx,setSpIdx]=useState(initialSpIdx<0?0:initialSpIdx);
+  const[breed,setBreed]=useState(animal?.breed||'');
+  const[age,setAge]=useState(animal?.age||'');
+  const[sex,setSex]=useState(animal?.sex||'M');
+  const[wt,setWt]=useState(String(animal?.wt||'').replace(/\s*kg\s*$/i,''));
+  const[allergy,setAllergy]=useState((animal?.allergy||[]).join(', '));
+  const[owner,setOwner]=useState(animal?.owner||'');
+  const[phone,setPhone]=useState(animal?.phone||'');
+  const[email,setEmail]=useState(animal?.email||'');
+  const[chip,setChip]=useState(animal?.chip||'');
+  const[sterilized,setSterilized]=useState(!!animal?.sterilized);
+
+  if(!animal) return <div style={{padding:20,color:'var(--txt2)'}}>Animal introuvable.</div>;
+
+  const species=SPECIES_OPTIONS[spIdx]||SPECIES_OPTIONS[0];
+  const submit=(e)=>{
+    e&&e.preventDefault&&e.preventDefault();
+    if(!nm.trim()){toast("Le nom de l'animal est requis",'r');return;}
+    if(typeof updateAnimal!=='function'){
+      console.error('[EditAnimalForm] updateAnimal manquant — HTML probablement en cache.');
+      toast("Version obsolète — rechargez la page (Cmd+Shift+R)",'r');
+      return;
+    }
+    try{
+      const patch={
+        nm:nm.trim(),
+        sp:species.sp,
+        av:species.av,
+        breed:breed.trim(),
+        age:age.trim(),
+        sex,
+        wt:wt.trim()?(wt.trim().includes('kg')?wt.trim():`${wt.trim()} kg`):'',
+        allergy:allergy.trim()?allergy.split(',').map(s=>s.trim()).filter(Boolean):[],
+        owner:owner.trim()||animal.owner,
+        phone:phone.trim(),
+        email:email.trim(),
+        chip:chip.trim(),
+        sterilized,
+      };
+      const updated=updateAnimal(animal.id,patch);
+      if(!updated){toast("Impossible de mettre à jour",'r');return;}
+      // If we're on the detail view, refresh selAnimal so the view re-renders with the new data.
+      setSelAnimal&&setSelAnimal({...updated});
+      setModal(null);
+      toast(`${updated.nm} mis à jour`,'tl');
+    }catch(err){
+      console.error('[EditAnimalForm] erreur dans updateAnimal:',err);
+      toast(`Erreur : ${err.message||err}`,'r');
+    }
+  };
+
+  return(<form onSubmit={submit}>
+    <div className="g2">
+      <div className="fg"><label className="fl">Nom de l'animal *</label><input className="fi" value={nm} onChange={e=>setNm(e.target.value)} required autoFocus/></div>
+      <div className="fg"><label className="fl">Espèce</label>
+        <select className="fi fi-sel" value={spIdx} onChange={e=>setSpIdx(Number(e.target.value))}>
+          {SPECIES_OPTIONS.map((s,i)=><option key={s.sp} value={i}>{Em[s.av]||''} {s.label}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Race</label><input className="fi" value={breed} onChange={e=>setBreed(e.target.value)}/></div>
+      <div className="fg"><label className="fl">Âge</label><input className="fi" value={age} onChange={e=>setAge(e.target.value)}/></div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Sexe</label>
+        <select className="fi fi-sel" value={sex} onChange={e=>setSex(e.target.value)}>
+          <option value="M">Mâle</option>
+          <option value="F">Femelle</option>
+        </select>
+      </div>
+      <div className="fg"><label className="fl">Poids</label>
+        <div style={{position:'relative'}}>
+          <input className="fi" type="number" step="0.1" min="0" value={wt} onChange={e=>setWt(e.target.value)} placeholder="kg" style={{paddingRight:36}}/>
+          <span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:'.78rem',color:'var(--txt2)',pointerEvents:'none'}}>kg</span>
+        </div>
+      </div>
+    </div>
+    <div className="fg"><label className="fl">Allergies connues <span style={{color:'var(--mg)',fontWeight:400,textTransform:'none',letterSpacing:0}}>(séparées par des virgules)</span></label>
+      <input className="fi" value={allergy} onChange={e=>setAllergy(e.target.value)} placeholder="Ex: Pénicilline, Aspirine"/>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Propriétaire</label><input className="fi" value={owner} onChange={e=>setOwner(e.target.value)}/></div>
+      <div className="fg"><label className="fl">Téléphone</label><input className="fi" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="06 XX XX XX XX"/></div>
+    </div>
+    <div className="g2">
+      <div className="fg"><label className="fl">Email propriétaire</label><input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="email@exemple.fr"/></div>
+      <div className="fg"><label className="fl">N° puce électronique</label><input className="fi" value={chip} onChange={e=>setChip(e.target.value)} placeholder="250269..."/></div>
+    </div>
+    <label style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'var(--bg)',borderRadius:10,cursor:'pointer',marginTop:6}}>
+      <input type="checkbox" checked={sterilized} onChange={e=>setSterilized(e.target.checked)} style={{accentColor:'var(--t)',cursor:'pointer',width:16,height:16}}/>
+      <span style={{fontSize:'.88rem',color:'var(--txt)'}}>Animal stérilisé / castré</span>
+    </label>
+    <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:14}}>
+      <button type="button" className="btn btn-o btn-sm" onClick={()=>setModal(null)}>Annuler</button>
+      <button type="submit" className="btn btn-t">💾 Sauvegarder</button>
     </div>
   </form>);
 }
@@ -3104,7 +3292,7 @@ function Animals(){
 
 // ===== ANIMAL DETAIL =====
 function AnimalDetail(){
-  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto,archive,reactivateAnimal,manualActs}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
+  const{selAnimal,nav,toast,setModal,modal,animalPhotos,setAnimalPhoto,removeAnimalPhoto,archive,reactivateAnimal,manualActs,deleteAnimal}=useContext(Ctx);const a=selAnimal||ANIMALS[0];
   const animalManualActs=(manualActs||{})[a.id]||[];
   // Manual vaccinations get merged into the existing static vacc list.
   const manualVaccs=animalManualActs.filter(x=>x.type==='Vaccination'||x.type==='Rappel vaccin').map(x=>({
@@ -3298,7 +3486,14 @@ function AnimalDetail(){
             <button className="btn btn-t btn-sm" onClick={()=>nav('consultation')}><I.Play/> Consultation</button>
             <button className="btn btn-o btn-sm" onClick={()=>nav('diagnostic')}><I.Brain/> Diagnostic</button>
             <button className="btn btn-g btn-sm" onClick={()=>setModal({title:'Ordonnance',type:'prescription',animal:`${a.nm} — ${a.breed}`})}><I.Rx/> Ordonnance</button>
+            <button className="btn btn-sm btn-ghost" title="Modifier la fiche" onClick={()=>setModal({type:'editAnimal',title:`Modifier ${a.nm}`,animalId:a.id})}>✏️ Modifier</button>
             <button className="btn btn-sm btn-ghost" title="Archiver ce dossier" onClick={()=>setModal({type:'archive',title:`Archiver ${a.nm}`,animal:a})}>📦 Archiver</button>
+            <button className="btn btn-sm btn-ghost" title="Supprimer la fiche" onClick={()=>{
+              if(!window.confirm(`Supprimer définitivement la fiche de ${a.nm} ?\n\nToutes les données (historique, vaccins, photos) seront perdues. Cette action est irréversible.`)) return;
+              const ok=deleteAnimal(a.id);
+              if(ok){toast(`${a.nm} supprimé`,'tl');nav('animals');}
+              else toast('Suppression impossible','r');
+            }} style={{color:'#dc2626'}}>🗑️ Supprimer</button>
           </>}
           {isArchived&&archiveMeta.canReactivate&&<button className="btn btn-sm btn-t" onClick={()=>{reactivateAnimal(a.id);toast(`${a.nm} réactivé dans la liste des patients`,'tl');}}>Réactiver le dossier</button>}
         </div>
