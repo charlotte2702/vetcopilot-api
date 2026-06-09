@@ -4194,39 +4194,73 @@ function Diagnostic(){
     dict.start({baseText:symptoms,onUpdate:setSymptoms,onError:(msg)=>toast(msg,'r')});
   };
 
-  // Image handlers
-  const addImages=(files)=>{
-    const validFiles=Array.from(files).filter(f=>f.type.startsWith('image/'));
-    if(validFiles.length===0){toast('Veuillez sélectionner des images (JPEG, PNG)','r');return;}
-    const newImgs=validFiles.map(f=>({id:Date.now()+Math.random(),file:f,url:URL.createObjectURL(f),name:f.name,cat:imgCat}));
-    setImages(prev=>[...prev,...newImgs]);
-    toast(`${validFiles.length} image${validFiles.length>1?'s':''} ajoutée${validFiles.length>1?'s':''}`,'tl');
+  // File handlers (images + PDFs sent as Claude multimodal blocks)
+  const ALLOWED_IMG_MIMES=['image/jpeg','image/png','image/gif','image/webp'];
+  const PDF_MIME='application/pdf';
+  const MAX_FILE_BYTES=5*1024*1024;
+  const MAX_TOTAL_BYTES=20*1024*1024;
+  const MAX_FILES=8;
+  const MAX_PDF_PAGES=100;
+  const fileToDataURL=(file)=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error('lecture impossible : '+file.name));r.readAsDataURL(file);});
+  // Heuristic page count: regex /Type /Page (not /Pages) on raw bytes — works
+  // on most well-formed PDFs but not on heavily compressed object streams.
+  const estimatePdfPages=async(file)=>{
+    try{
+      const buf=await file.arrayBuffer();
+      const txt=new TextDecoder('latin1').decode(buf);
+      const m=txt.match(/\/Type\s*\/Page[^s]/g);
+      return m?m.length:null;
+    }catch(_){return null;}
   };
-  const removeImage=(id)=>{setImages(prev=>{const img=prev.find(i=>i.id===id);if(img)URL.revokeObjectURL(img.url);return prev.filter(i=>i.id!==id);});};
+  const addImages=async(rawFiles)=>{
+    const incoming=Array.from(rawFiles||[]);
+    if(incoming.length===0)return;
+    const cumulated=images.reduce((s,i)=>s+(i.file?.size||0),0);
+    let runningTotal=cumulated;
+    let runningCount=images.length;
+    const accepted=[];
+    const rejected=[];
+    for(const f of incoming){
+      const isImg=ALLOWED_IMG_MIMES.includes(f.type);
+      const isPdf=f.type===PDF_MIME;
+      if(!isImg&&!isPdf){rejected.push(`${f.name} (format non supporté)`);continue;}
+      if(f.size>MAX_FILE_BYTES){rejected.push(`${f.name} (${(f.size/1024/1024).toFixed(1)} MB > 5 MB)`);continue;}
+      if(runningCount>=MAX_FILES){rejected.push(`${f.name} (limite ${MAX_FILES} fichiers atteinte)`);continue;}
+      if(runningTotal+f.size>MAX_TOTAL_BYTES){rejected.push(`${f.name} (taille totale > 20 MB)`);continue;}
+      if(isPdf){
+        const pages=await estimatePdfPages(f);
+        if(pages!=null&&pages>MAX_PDF_PAGES){rejected.push(`${f.name} (~${pages} pages > ${MAX_PDF_PAGES} max)`);continue;}
+      }
+      accepted.push({id:Date.now()+Math.random(),file:f,kind:isPdf?'pdf':'image',url:isPdf?null:URL.createObjectURL(f),name:f.name,cat:imgCat});
+      runningTotal+=f.size;runningCount++;
+    }
+    if(accepted.length)setImages(prev=>[...prev,...accepted]);
+    if(accepted.length&&!rejected.length) toast(`${accepted.length} fichier${accepted.length>1?'s':''} ajouté${accepted.length>1?'s':''}`,'tl');
+    if(rejected.length) toast(`Fichiers ignorés : ${rejected.join(', ')}`,'r');
+  };
+  const removeImage=(id)=>{setImages(prev=>{const img=prev.find(i=>i.id===id);if(img&&img.url)URL.revokeObjectURL(img.url);return prev.filter(i=>i.id!==id);});};
   const handleDrop=(e)=>{e.preventDefault();setDragOver(false);addImages(e.dataTransfer.files);};
   const analyzeImages=async()=>{
-    if(images.length===0){toast('Ajoutez au moins une image à analyser','r');return;}
-    const first=images[0];
-    if(first.file.size>5*1024*1024){toast(`Image trop volumineuse (${Math.round(first.file.size/1024/1024*10)/10} MB) — limite 5 MB`,'r');return;}
+    if(images.length===0){toast('Ajoutez au moins un fichier à analyser','r');return;}
     setImgAnalyzing(true);setImgResults(null);
     try{
-      // FileReader → data URL → strip prefix → base64 payload for the API.
-      const dataUrl=await new Promise((resolve,reject)=>{
-        const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error('lecture du fichier impossible'));r.readAsDataURL(first.file);
-      });
-      const base64=dataUrl.split(',')[1];
-      const cat=first.cat||imgCat;
+      const payload=await Promise.all(images.map(async(it)=>{
+        const dataUrl=await fileToDataURL(it.file);
+        const base64=dataUrl.split(',')[1];
+        return{base64,mediaType:it.file.type,kind:it.kind,name:it.name};
+      }));
+      const cat=imgCat;
       const res=await fetch('/api/diagnostic/image',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({imageBase64:base64,mediaType:first.file.type,category:cat,animalId:anId})
+        body:JSON.stringify({files:payload,category:cat,animalId:anId})
       });
       const data=await res.json();
       if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
       setImgResults({...data.result,category:cat,imageCount:images.length});
-      toast(`Analyse d'image terminée — ${(data.result.observations||[]).length} observations`,'tl');
+      toast(`Analyse terminée — ${(data.result.observations||[]).length} observations`,'tl');
     }catch(err){
-      toast(`Échec de l'analyse d'image : ${err.message||err}`,'r');
+      toast(`Échec de l'analyse : ${err.message||err}`,'r');
     }finally{
       setImgAnalyzing(false);
     }
@@ -4327,7 +4361,7 @@ function Diagnostic(){
           </div>
 
           {/* Drag & drop zone */}
-          <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e=>{addImages(e.target.files);e.target.value='';}}/>
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" multiple style={{display:'none'}} onChange={e=>{addImages(e.target.files);e.target.value='';}}/>
           <div
             className={`img-drop ${dragOver?'drag-over':''} ${images.length>0?'has-images':''}`}
             onDragOver={e=>{e.preventDefault();setDragOver(true);}}
@@ -4336,23 +4370,31 @@ function Diagnostic(){
             onClick={()=>images.length===0&&fileRef.current?.click()}
           >
             {images.length===0?<>
-              <div style={{fontSize:'2.8rem',marginBottom:8,opacity:.7}}>📸</div>
-              <div style={{fontWeight:600,color:'var(--txt)',marginBottom:4,fontSize:'.92rem'}}>Glissez vos images ici</div>
-              <p style={{color:'var(--txt2)',fontSize:'.82rem',marginBottom:12}}>Photo de l'animal, plaie, peau, œil, radio, échographie, imagerie médicale</p>
+              <div style={{fontSize:'2.8rem',marginBottom:8,opacity:.7}}>📎</div>
+              <div style={{fontWeight:600,color:'var(--txt)',marginBottom:4,fontSize:'.92rem'}}>Glissez vos fichiers ici</div>
+              <p style={{color:'var(--txt2)',fontSize:'.82rem',marginBottom:12}}>Images (radio, échographie, photo lésion…) ou PDF (bilan, compte rendu d'analyse)</p>
               <div style={{display:'flex',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
                 <button className="btn btn-t btn-sm" onClick={e=>{e.stopPropagation();fileRef.current?.click();}}><I.Upload/> Parcourir</button>
                 <button className="btn btn-o btn-sm" onClick={e=>{e.stopPropagation();fileRef.current?.click();}}><I.Camera/> Prendre une photo</button>
               </div>
-              <div style={{fontSize:'.7rem',color:'var(--mg)',marginTop:10}}>JPEG, PNG — Plusieurs images acceptées</div>
+              <div style={{fontSize:'.7rem',color:'var(--mg)',marginTop:10}}>JPEG, PNG, GIF, WebP, PDF — 5 MB/fichier, 20 MB cumulés, 8 fichiers max</div>
             </>:<>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                <div style={{fontWeight:600,fontSize:'.86rem',color:'var(--txt)'}}>{images.length} image{images.length>1?'s':''} importée{images.length>1?'s':''}</div>
+                <div style={{fontWeight:600,fontSize:'.86rem',color:'var(--txt)'}}>{images.length} fichier{images.length>1?'s':''} importé{images.length>1?'s':''}</div>
                 <button className="btn btn-sm btn-o" onClick={e=>{e.stopPropagation();fileRef.current?.click();}}><I.Plus/> Ajouter</button>
               </div>
               <div className="img-previews" onClick={e=>e.stopPropagation()}>
                 {images.map(img=>(
                   <div key={img.id} className="img-thumb">
-                    <img src={img.url} alt={img.name}/>
+                    {img.kind==='pdf'?(
+                      <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(231,76,60,.06)',color:'#e74c3c',padding:8,boxSizing:'border-box'}}>
+                        <div style={{fontSize:'1.7rem',lineHeight:1}}>📄</div>
+                        <div style={{fontSize:'.62rem',fontWeight:700,marginTop:3,letterSpacing:'.05em'}}>PDF</div>
+                        <div style={{fontSize:'.6rem',color:'var(--txt2)',marginTop:4,textAlign:'center',wordBreak:'break-word',lineHeight:1.2,maxHeight:'2.4em',overflow:'hidden'}}>{img.name}</div>
+                      </div>
+                    ):(
+                      <img src={img.url} alt={img.name}/>
+                    )}
                     <button className="img-thumb-rm" onClick={()=>removeImage(img.id)}><I.Trash/></button>
                     <div className="img-thumb-cat">{img.cat}</div>
                   </div>
@@ -4364,9 +4406,9 @@ function Diagnostic(){
           {/* Analyze button */}
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:16}}>
             <button className="btn btn-t btn-lg" onClick={analyzeImages} disabled={imgAnalyzing||images.length===0}>
-              {imgAnalyzing?<><div style={{width:14,height:14,border:'2px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/> Analyse en cours...</>:<><I.Spark/> Analyser l'image avec l'IA</>}
+              {imgAnalyzing?<><div style={{width:14,height:14,border:'2px solid rgba(255,255,255,.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin .6s linear infinite'}}/> Analyse en cours...</>:<><I.Spark/> Analyser avec l'IA</>}
             </button>
-            {images.length>0&&!imgAnalyzing&&<button className="btn btn-o btn-sm" onClick={()=>{images.forEach(i=>URL.revokeObjectURL(i.url));setImages([]);setImgResults(null);}}><I.Trash/> Tout supprimer</button>}
+            {images.length>0&&!imgAnalyzing&&<button className="btn btn-o btn-sm" onClick={()=>{images.forEach(i=>{if(i.url)URL.revokeObjectURL(i.url);});setImages([]);setImgResults(null);}}><I.Trash/> Tout supprimer</button>}
           </div>
         </div>
 
