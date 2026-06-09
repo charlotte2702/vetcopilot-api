@@ -3263,6 +3263,8 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
   const[soap,setSoap]=useState(null);
   const[ownerSummary,setOwnerSummary]=useState('');
   const[tab,setTab]=useState('vet');
+  const hasDiag=!!(diagResult&&Array.isArray(diagResult.hypotheses)&&diagResult.hypotheses.length);
+  const[includeDiag,setIncludeDiag]=useState(true);
   const an=ANIMALS.find(a=>a.id===animalId)||ANIMALS[0];
   const topHypo=diagResult&&diagResult.hypotheses&&diagResult.hypotheses[0];
   const dateStr=new Date().toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});
@@ -3291,7 +3293,8 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
             motif:symptoms||'Consultation générale',
             examen:notes||'',
             hypothese:topHypo?topHypo.nm:'',
-            traitement:''
+            traitement:'',
+            diagResult:(hasDiag&&includeDiag)?diagResult:null
           })
         });
         const data=await res.json();
@@ -3308,12 +3311,21 @@ function ReportInline({animalId,symptoms,notes,diagResult,onFinish}){
       }
     })();
     return()=>{cancelled=true;};
-  },[animalId,symptoms,notes,topHypo&&topHypo.nm]);
+  },[animalId,symptoms,notes,topHypo&&topHypo.nm,hasDiag&&includeDiag]);
 
-  if(gen) return <div className="c" style={{textAlign:'center',padding:50}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--g)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Génération IA des comptes rendus...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:6}}>Rédaction du rapport vétérinaire et du compte rendu propriétaire...</p></div>;
-  if(error||!soap) return <div className="c" style={{padding:30,textAlign:'center'}}><div style={{fontSize:'1.4rem',marginBottom:8}}>⚠️</div><div style={{fontWeight:600,color:'#e74c3c',marginBottom:6}}>Impossible de générer le compte rendu</div><p style={{fontSize:'.84rem',color:'var(--txt2)',marginBottom:14}}>{error||'Aucun résultat reçu'}</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><button className="btn btn-o" onClick={onFinish}>Revenir au tableau de bord</button></div></div>;
+  const diagBanner=hasDiag&&(
+    <label style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',marginBottom:14,background:'rgba(43,160,143,.08)',border:'1px solid rgba(43,160,143,.18)',borderRadius:'var(--r)',fontSize:'.82rem',fontWeight:600,color:'var(--t)',cursor:'pointer'}}>
+      <input type="checkbox" checked={includeDiag} onChange={e=>setIncludeDiag(e.target.checked)} style={{accentColor:'var(--t)',width:15,height:15,cursor:'pointer',flexShrink:0}}/>
+      <span>🧠</span>
+      <span style={{flex:1}}>Diagnostic disponible — il sera intégré au compte rendu</span>
+    </label>
+  );
+
+  if(gen) return <>{diagBanner}<div className="c" style={{textAlign:'center',padding:50}}><div style={{width:44,height:44,border:'3px solid var(--lg)',borderTopColor:'var(--g)',borderRadius:'50%',margin:'0 auto 14px',animation:'spin .7s linear infinite'}}/><div style={{fontWeight:600,color:'var(--txt)'}}>Génération IA des comptes rendus...</div><p style={{fontSize:'.82rem',color:'var(--txt2)',marginTop:6}}>Rédaction du rapport vétérinaire et du compte rendu propriétaire...</p></div></>;
+  if(error||!soap) return <>{diagBanner}<div className="c" style={{padding:30,textAlign:'center'}}><div style={{fontSize:'1.4rem',marginBottom:8}}>⚠️</div><div style={{fontWeight:600,color:'#e74c3c',marginBottom:6}}>Impossible de générer le compte rendu</div><p style={{fontSize:'.84rem',color:'var(--txt2)',marginBottom:14}}>{error||'Aucun résultat reçu'}</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><button className="btn btn-o" onClick={onFinish}>Revenir au tableau de bord</button></div></div></>;
 
   return(<>
+    {diagBanner}
     <div className="tabs" style={{maxWidth:450}}>
       <button className={`tab ${tab==='vet'?'on':''}`} onClick={()=>setTab('vet')}>🩺 Compte rendu vétérinaire</button>
       <button className={`tab ${tab==='own'?'on':''}`} onClick={()=>setTab('own')}>👤 Compte rendu propriétaire</button>
