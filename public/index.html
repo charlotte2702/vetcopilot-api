@@ -3078,6 +3078,114 @@ function Dashboard(){
   </div>);
 }
 
+// ===== Reusable upload zone (images + PDF, base64 inline, RGPD) =====
+// Same limits / UI / format that /api/diagnostic/image expects:
+// { base64, mediaType, kind:'image'|'pdf', name } — base64 stripped of data URL prefix.
+function FileUploadZone({files,onFilesChange,category='Document',showCategory=false,helpText}){
+  const{toast}=useContext(Ctx);
+  const[dragOver,setDragOver]=useState(false);
+  const fileRef=useRef(null);
+  const ALLOWED_IMG_MIMES=['image/jpeg','image/png','image/gif','image/webp'];
+  const PDF_MIME='application/pdf';
+  const MAX_FILE_BYTES=5*1024*1024;
+  const MAX_TOTAL_BYTES=20*1024*1024;
+  const MAX_FILES=8;
+  const MAX_PDF_PAGES=100;
+  const estimatePdfPages=async(file)=>{
+    try{
+      const buf=await file.arrayBuffer();
+      const txt=new TextDecoder('latin1').decode(buf);
+      const m=txt.match(/\/Type\s*\/Page[^s]/g);
+      return m?m.length:null;
+    }catch(_){return null;}
+  };
+  const addFiles=async(rawFiles)=>{
+    const incoming=Array.from(rawFiles||[]);
+    if(incoming.length===0)return;
+    const cumulated=files.reduce((s,i)=>s+(i.file?.size||0),0);
+    let runningTotal=cumulated;
+    let runningCount=files.length;
+    const accepted=[];
+    const rejected=[];
+    for(const f of incoming){
+      const isImg=ALLOWED_IMG_MIMES.includes(f.type);
+      const isPdf=f.type===PDF_MIME;
+      if(!isImg&&!isPdf){rejected.push(`${f.name} (format non supporté)`);continue;}
+      if(f.size>MAX_FILE_BYTES){rejected.push(`${f.name} (${(f.size/1024/1024).toFixed(1)} MB > 5 MB)`);continue;}
+      if(runningCount>=MAX_FILES){rejected.push(`${f.name} (limite ${MAX_FILES} fichiers atteinte)`);continue;}
+      if(runningTotal+f.size>MAX_TOTAL_BYTES){rejected.push(`${f.name} (taille totale > 20 MB)`);continue;}
+      if(isPdf){
+        const pages=await estimatePdfPages(f);
+        if(pages!=null&&pages>MAX_PDF_PAGES){rejected.push(`${f.name} (~${pages} pages > ${MAX_PDF_PAGES} max)`);continue;}
+      }
+      accepted.push({id:Date.now()+Math.random(),file:f,kind:isPdf?'pdf':'image',url:isPdf?null:URL.createObjectURL(f),name:f.name,cat:category});
+      runningTotal+=f.size;runningCount++;
+    }
+    if(accepted.length) onFilesChange([...files,...accepted]);
+    if(accepted.length&&!rejected.length) toast(`${accepted.length} fichier${accepted.length>1?'s':''} ajouté${accepted.length>1?'s':''}`,'tl');
+    if(rejected.length) toast(`Fichiers ignorés : ${rejected.join(', ')}`,'r');
+  };
+  const removeFile=(id)=>{
+    const f=files.find(i=>i.id===id);
+    if(f&&f.url)URL.revokeObjectURL(f.url);
+    onFilesChange(files.filter(i=>i.id!==id));
+  };
+  const handleDrop=(e)=>{e.preventDefault();setDragOver(false);addFiles(e.dataTransfer.files);};
+  return(<>
+    <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" multiple style={{display:'none'}} onChange={e=>{addFiles(e.target.files);e.target.value='';}}/>
+    <div
+      className={`img-drop ${dragOver?'drag-over':''} ${files.length>0?'has-images':''}`}
+      onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+      onDragLeave={()=>setDragOver(false)}
+      onDrop={handleDrop}
+      onClick={()=>files.length===0&&fileRef.current?.click()}
+    >
+      {files.length===0?(<>
+        <div style={{fontSize:'2.8rem',marginBottom:8,opacity:.7}}>📎</div>
+        <div style={{fontWeight:600,color:'var(--txt)',marginBottom:4,fontSize:'.92rem'}}>Glissez vos fichiers ici</div>
+        <p style={{color:'var(--txt2)',fontSize:'.82rem',marginBottom:12}}>{helpText||"Images (radio, échographie, photo lésion…) ou PDF (bilan, compte rendu d'analyse)"}</p>
+        <div style={{display:'flex',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
+          <button className="btn btn-t btn-sm" onClick={e=>{e.stopPropagation();fileRef.current?.click();}}><I.Upload/> Parcourir</button>
+          <button className="btn btn-o btn-sm" onClick={e=>{e.stopPropagation();fileRef.current?.click();}}><I.Camera/> Prendre une photo</button>
+        </div>
+        <div style={{fontSize:'.7rem',color:'var(--mg)',marginTop:10}}>JPEG, PNG, GIF, WebP, PDF — 5 MB/fichier, 20 MB cumulés, 8 fichiers max</div>
+      </>):(<>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+          <div style={{fontWeight:600,fontSize:'.86rem',color:'var(--txt)'}}>{files.length} fichier{files.length>1?'s':''} importé{files.length>1?'s':''}</div>
+          <button className="btn btn-sm btn-o" onClick={e=>{e.stopPropagation();fileRef.current?.click();}}><I.Plus/> Ajouter</button>
+        </div>
+        <div className="img-previews" onClick={e=>e.stopPropagation()}>
+          {files.map(img=>(
+            <div key={img.id} className="img-thumb">
+              {img.kind==='pdf'?(
+                <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(231,76,60,.06)',color:'#e74c3c',padding:8,boxSizing:'border-box'}}>
+                  <div style={{fontSize:'1.7rem',lineHeight:1}}>📄</div>
+                  <div style={{fontSize:'.62rem',fontWeight:700,marginTop:3,letterSpacing:'.05em'}}>PDF</div>
+                  <div style={{fontSize:'.6rem',color:'var(--txt2)',marginTop:4,textAlign:'center',wordBreak:'break-word',lineHeight:1.2,maxHeight:'2.4em',overflow:'hidden'}}>{img.name}</div>
+                </div>
+              ):(
+                <img src={img.url} alt={img.name}/>
+              )}
+              <button className="img-thumb-rm" onClick={()=>removeFile(img.id)}><I.Trash/></button>
+              {showCategory&&<div className="img-thumb-cat">{img.cat}</div>}
+            </div>
+          ))}
+        </div>
+      </>)}
+    </div>
+  </>);
+}
+// Encode a FileUploadZone file entry into the {base64,mediaType,kind,name} shape
+// expected by /api/diagnostic and /api/diagnostic/image.
+async function encodeUploadFiles(files){
+  const toDataURL=(file)=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error('lecture impossible : '+file.name));r.readAsDataURL(file);});
+  return Promise.all(files.map(async(it)=>{
+    const dataUrl=await toDataURL(it.file);
+    const base64=dataUrl.split(',')[1];
+    return{base64,mediaType:it.file.type,kind:it.kind,name:it.name};
+  }));
+}
+
 // ===== CONSULTATION FLOW (5 steps now) =====
 function ConsultationFlow(){
   const{nav,toast,setModal,addInvoice}=useContext(Ctx);
@@ -3086,6 +3194,13 @@ function ConsultationFlow(){
   const[symptoms,setSymptoms]=useState('');
   const[notes,setNotes]=useState('');
   const[diagResult,setDiagResult]=useState(null);
+  // Examen clinique : constantes (controlled) + pièces jointes (photos / PDF)
+  const[temperature,setTemperature]=useState('38.7');
+  const[heartRate,setHeartRate]=useState('90');
+  const[respRate,setRespRate]=useState('22');
+  const[mucMembranes,setMucMembranes]=useState('Roses');
+  const[generalState,setGeneralState]=useState('Bon');
+  const[examenFiles,setExamenFiles]=useState([]);
   const finishConsultation=useCallback(()=>{
     const an=ANIMALS.find(a=>a.id===anId)||ANIMALS[0];
     const d=new Date();
@@ -3136,19 +3251,23 @@ function ConsultationFlow(){
     {step===1&&<div className="c af1" style={{maxWidth:700}}>
       <div className="c-title" style={{marginBottom:16}}>Examen clinique</div>
       <div className="g3">
-        <div className="fg"><label className="fl">Température (°C)</label><input className="fi" type="number" step="0.1" defaultValue="38.7"/></div>
-        <div className="fg"><label className="fl">FC (bpm)</label><input className="fi" type="number" defaultValue="90"/></div>
-        <div className="fg"><label className="fl">FR (/min)</label><input className="fi" type="number" defaultValue="22"/></div>
+        <div className="fg"><label className="fl">Température (°C)</label><input className="fi" type="number" step="0.1" value={temperature} onChange={e=>setTemperature(e.target.value)}/></div>
+        <div className="fg"><label className="fl">FC (bpm)</label><input className="fi" type="number" value={heartRate} onChange={e=>setHeartRate(e.target.value)}/></div>
+        <div className="fg"><label className="fl">FR (/min)</label><input className="fi" type="number" value={respRate} onChange={e=>setRespRate(e.target.value)}/></div>
       </div>
       <div className="g2">
-        <div className="fg"><label className="fl">État des muqueuses</label><select className="fi fi-sel"><option>Roses</option><option>Pâles</option><option>Cyanosées</option><option>Ictériques</option></select></div>
-        <div className="fg"><label className="fl">État général</label><select className="fi fi-sel"><option>Bon</option><option>Moyen</option><option>Altéré</option><option>Critique</option></select></div>
+        <div className="fg"><label className="fl">État des muqueuses</label><select className="fi fi-sel" value={mucMembranes} onChange={e=>setMucMembranes(e.target.value)}><option>Roses</option><option>Pâles</option><option>Cyanosées</option><option>Ictériques</option></select></div>
+        <div className="fg"><label className="fl">État général</label><select className="fi fi-sel" value={generalState} onChange={e=>setGeneralState(e.target.value)}><option>Bon</option><option>Moyen</option><option>Altéré</option><option>Critique</option></select></div>
       </div>
       <div className="fg"><label className="fl">Symptômes observés</label>
         <div style={{position:'relative'}}><textarea className="fi" rows={4} placeholder="Décrivez les symptômes..." value={symptoms} onChange={e=>setSymptoms(e.target.value)}/>
         <button style={{position:'absolute',bottom:10,right:10,width:38,height:38,borderRadius:'50%',background:dictCons.recording?'#e74c3c':'#0B1D34',color:dictCons.recording?'#fff':'var(--t)',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .2s',animation:dictCons.recording?'pulse 1.5s infinite':'none',cursor:'pointer',border:'none'}}
           onClick={toggleConsMic} title={dictCons.recording?"Arrêter la dictée":"Démarrer la dictée vocale (fr-FR)"} aria-label={dictCons.recording?"Arrêter la dictée":"Démarrer la dictée vocale"}><I.Mic/></button>
         </div>
+      </div>
+      <div className="fg">
+        <label className="fl">Pièces jointes (photos cliniques, radios, échographies, PDF d'analyses…)</label>
+        <FileUploadZone files={examenFiles} onFilesChange={setExamenFiles} category="Examen" helpText="Photos cliniques, radiographies, échographies, ou PDF (bilan, compte rendu d'analyse) — pris en compte par le diagnostic IA"/>
       </div>
       <div className="fg"><label className="fl">Notes d'examen</label><textarea className="fi" rows={2} placeholder="Notes supplémentaires..." value={notes} onChange={e=>setNotes(e.target.value)}/></div>
       <div style={{display:'flex',gap:8,marginTop:8}}>
@@ -3157,7 +3276,7 @@ function ConsultationFlow(){
       </div>
     </div>}
 
-    {step===2&&<DiagnosticInline animalId={anId} symptoms={symptoms} notes={notes} onResults={setDiagResult} onNext={()=>setStep(3)} onBack={()=>setStep(1)}/>}
+    {step===2&&<DiagnosticInline animalId={anId} symptoms={symptoms} notes={notes} vitals={{temperature,heartRate,respRate,mucMembranes,generalState}} files={examenFiles} onResults={setDiagResult} onNext={()=>setStep(3)} onBack={()=>setStep(1)}/>}
 
     {step===3&&<div className="c af1" style={{maxWidth:700}}>
       <div className="c-title" style={{marginBottom:16}}>Ordonnance</div>
@@ -3185,7 +3304,7 @@ function ConsultationFlow(){
     </div>}
   </div>);
 }
-function DiagnosticInline({animalId,symptoms,notes,onResults,onNext,onBack}){
+function DiagnosticInline({animalId,symptoms,notes,vitals,files,onResults,onNext,onBack}){
   const{toast}=useContext(Ctx);
   const[loading,setLoading]=useState(true);
   const[error,setError]=useState('');
@@ -3197,10 +3316,20 @@ function DiagnosticInline({animalId,symptoms,notes,onResults,onNext,onBack}){
     setLoading(true);setError('');setDr(null);
     (async()=>{
       try{
+        // Encode attached files into the same {base64,mediaType,kind,name} shape
+        // used by /api/diagnostic/image — backend then sends them as Claude
+        // multimodal blocks (image / document) alongside the clinical context.
+        const encodedFiles=(Array.isArray(files)&&files.length)?await encodeUploadFiles(files):[];
         const res=await fetch('/api/diagnostic',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({animalId,symptoms:symptoms||'Symptômes non renseignés',notes:notes||''})
+          body:JSON.stringify({
+            animalId,
+            symptoms:symptoms||'Symptômes non renseignés',
+            notes:notes||'',
+            vitals:vitals||null,
+            files:encodedFiles.length?encodedFiles:undefined,
+          })
         });
         const data=await res.json();
         if(cancelled) return;
