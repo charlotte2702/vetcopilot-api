@@ -1,6 +1,6 @@
 {
-  "name": "VetCopilot — Assistant Vétérinaire",
-  "short_name": "VetCopilot",
+  "name": "Menescau — Assistant Vétérinaire",
+  "short_name": "Menescau",
   "description": "Assistant intelligent du vétérinaire : planning, dossiers patients, aide au diagnostic et comptes rendus SOAP.",
   "lang": "fr",
   "start_url": "./",
